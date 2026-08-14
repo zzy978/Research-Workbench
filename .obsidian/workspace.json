@@ -1,0 +1,230 @@
+{
+  "main": {
+    "id": "0ab9ea42d0d7536a",
+    "type": "split",
+    "children": [
+      {
+        "id": "5e32db77905f4631",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "63aabdae66e646d9",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "HERMES_INSPIRED_LOCAL_MVP_DEVELOPMENT_EXECUTION_PLAN.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "HERMES_INSPIRED_LOCAL_MVP_DEVELOPMENT_EXECUTION_PLAN"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "9feb205c627f5573",
+    "type": "split",
+    "children": [
+      {
+        "id": "757ef4041a5bbaf2",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "3b0aa9e5f9720e8f",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-folder-closed",
+              "title": "文件列表"
+            }
+          },
+          {
+            "id": "41fb2f559f2fda10",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "搜索"
+            }
+          },
+          {
+            "id": "db8b44325714fb3f",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-bookmark",
+              "title": "书签"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 200
+  },
+  "right": {
+    "id": "dad315e5db5e4c0f",
+    "type": "split",
+    "children": [
+      {
+        "id": "f3d6ff30cda3f43b",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "b30ebd5dd37d2b3c",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "HERMES_AGENT_DESIGN_REFERENCE_AND_IMPROVEMENT_PROPOSAL.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "反向链接"
+            }
+          },
+          {
+            "id": "fb14d1aa31d0bbbf",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "HERMES_AGENT_DESIGN_REFERENCE_AND_IMPROVEMENT_PROPOSAL.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "出链"
+            }
+          },
+          {
+            "id": "54b415e76ac0cfc6",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "标签"
+            }
+          },
+          {
+            "id": "4cf59d7c219b935e",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "添加笔记属性"
+            }
+          },
+          {
+            "id": "03c3a998f90db4ba",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "HERMES_INSPIRED_LOCAL_MVP_DEVELOPMENT_EXECUTION_PLAN.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "大纲"
+            }
+          }
+        ],
+        "currentTab": 4
+      }
+    ],
+    "direction": "horizontal",
+    "width": 316.699951171875
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:打开快速切换": false,
+      "graph:查看关系图谱": false,
+      "canvas:新建白板": false,
+      "daily-notes:打开/创建今天的日记": false,
+      "templates:插入模板": false,
+      "command-palette:打开命令面板": false,
+      "bases:新建数据库": false
+    }
+  },
+  "active": "63aabdae66e646d9",
+  "lastOpenFiles": [
+    "data/phase01_verify.db-wal",
+    "data/phase01_verify.db-shm",
+    "data/phase01_verify.db-journal",
+    "data/phase01_verify.db",
+    "data/app.db-shm",
+    "data/app.db-wal",
+    "data/app.db-journal",
+    "data/app.db",
+    "pytest.ini",
+    "graphrag_agent/persistence/repositories/__pycache__/core.cpython-310.pyc.2242775429200",
+    "evals/baseline/results.md",
+    "cache/naive_search",
+    "frontend/node_modules/@esbuild/win32-x64/README.md",
+    "frontend/node_modules/@remix-run/router/README.md",
+    "frontend/node_modules/@remix-run/router/LICENSE.md",
+    "frontend/node_modules/@remix-run/router/CHANGELOG.md",
+    "frontend/node_modules/react-dom/README.md",
+    "frontend/node_modules/vite/README.md",
+    "frontend/node_modules/vite/LICENSE.md",
+    "frontend/node_modules/@babel/template/README.md",
+    "frontend/node_modules/typescript/SECURITY.md",
+    "frontend/node_modules/typescript/README.md",
+    "frontend/node_modules/react-router-dom/README.md",
+    "frontend/node_modules/react-router-dom/LICENSE.md",
+    "frontend/node_modules/react-router-dom/CHANGELOG.md",
+    "frontend/node_modules/@types/prop-types/README.md",
+    "frontend/node_modules/rollup/README.md",
+    "frontend/node_modules/rollup/LICENSE.md",
+    "frontend/node_modules/parse-entities/node_modules/@types/unist/README.md",
+    "frontend/node_modules/react/README.md",
+    "frontend/node_modules/@types/react/README.md",
+    "frontend/node_modules/react-markdown/readme.md",
+    "frontend/node_modules/@types/react-dom/README.md",
+    "frontend/node_modules/@types/babel__core/README.md",
+    "frontend/node_modules/@babel/plugin-transform-react-jsx-self/README.md",
+    "frontend/node_modules/@babel/core/README.md"
+  ]
+}

@@ -51,6 +51,12 @@ def _get_env_choice(key: str, choices: set[str], default: str) -> str:
     return value
 
 
+def _require_positive(key: str, value: int) -> int:
+    if value < 1:
+        raise ValueError(f"环境变量 {key} 必须大于等于 1")
+    return value
+
+
 # ===== 基础路径设置 =====
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # graphrag_agent包目录
@@ -61,7 +67,42 @@ FILE_REGISTRY_PATH = PROJECT_ROOT / "file_registry.json"  # 文件注册表路�
 # ===== 知识库与系统参数 =====
 
 KB_NAME = "临床医学"  # 知识库主题，用于deepsearch
-workers = _get_env_int("FASTAPI_WORKERS", 2) or 2  # FastAPI 并发进程数
+workers = _get_env_int("FASTAPI_WORKERS", 1) or 1  # 本地 MVP 强制单进程
+LOCAL_MVP_SINGLE_WORKER = workers == 1
+
+# ===== 本地 MVP 应用与持久化配置 =====
+
+APP_ENV = os.getenv("APP_ENV", "local")
+APP_HOST = os.getenv("APP_HOST", "127.0.0.1")
+APP_PORT = _require_positive("APP_PORT", _get_env_int("APP_PORT", 8000) or 8000)
+FRONTEND_ORIGINS = tuple(
+    item.strip()
+    for item in os.getenv("FRONTEND_ORIGINS", "http://localhost:5173").split(",")
+    if item.strip()
+)
+APP_DATABASE_URL = os.getenv(
+    "APP_DATABASE_URL", "sqlite+aiosqlite:///./data/app.db"
+).strip()
+ARTIFACT_ROOT = Path(os.getenv("ARTIFACT_ROOT", PROJECT_ROOT / "data" / "artifacts")).expanduser()
+AUTO_RESUME_RUNS = _get_env_bool("AUTO_RESUME_RUNS", True)
+
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+TAVILY_SEARCH_DEPTH = _get_env_choice("TAVILY_SEARCH_DEPTH", {"basic", "advanced"}, "advanced")
+TAVILY_MAX_RESULTS = _require_positive("TAVILY_MAX_RESULTS", _get_env_int("TAVILY_MAX_RESULTS", 5) or 5)
+TAVILY_TIMEOUT_SECONDS = _require_positive("TAVILY_TIMEOUT_SECONDS", _get_env_int("TAVILY_TIMEOUT_SECONDS", 45) or 45)
+TAVILY_CACHE_TTL_SECONDS = _require_positive("TAVILY_CACHE_TTL_SECONDS", _get_env_int("TAVILY_CACHE_TTL_SECONDS", 86400) or 86400)
+
+HARNESS_BUDGETS = {
+    "wall_time_seconds": _require_positive("RUN_MAX_WALL_TIME_SECONDS", _get_env_int("RUN_MAX_WALL_TIME_SECONDS", 900) or 900),
+    "max_plan_tasks": _require_positive("RUN_MAX_PLAN_TASKS", _get_env_int("RUN_MAX_PLAN_TASKS", 8) or 8),
+    "max_tool_calls": _require_positive("RUN_MAX_TOOL_CALLS", _get_env_int("RUN_MAX_TOOL_CALLS", 30) or 30),
+    "max_tavily_calls": _require_positive("RUN_MAX_TAVILY_CALLS", _get_env_int("RUN_MAX_TAVILY_CALLS", 20) or 20),
+    "max_replans": _require_positive("RUN_MAX_REPLANS", _get_env_int("RUN_MAX_REPLANS", 2) or 2),
+    "max_task_retries": _require_positive("RUN_MAX_TASK_RETRIES", _get_env_int("RUN_MAX_TASK_RETRIES", 2) or 2),
+    "max_llm_tokens": _require_positive("RUN_MAX_LLM_TOKENS", _get_env_int("RUN_MAX_LLM_TOKENS", 100000) or 100000),
+    "max_concurrency": _require_positive("RUN_MAX_CONCURRENCY", _get_env_int("RUN_MAX_CONCURRENCY", 4) or 4),
+    "tool_timeout_seconds": _require_positive("RUN_TOOL_TIMEOUT_SECONDS", _get_env_int("RUN_TOOL_TIMEOUT_SECONDS", 60) or 60),
+}
 
 # ===== 知识图谱配置 =====
 

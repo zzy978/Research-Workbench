@@ -15,6 +15,7 @@ from graphrag_agent.agents.multi_agent.integration.multi_agent_factory import (
     OrchestratorBundle,
 )
 from graphrag_agent.agents.multi_agent.orchestrator import OrchestratorResult
+from graphrag_agent.persistence.trajectory_exporter import TrajectoryExporter
 
 
 class MultiAgentFacade:
@@ -25,8 +26,10 @@ class MultiAgentFacade:
         *,
         bundle: Optional[OrchestratorBundle] = None,
         cache_manager: Optional[CacheManager] = None,
+        trajectory_exporter: Optional[TrajectoryExporter] = None,
     ) -> None:
         self.cache_manager = cache_manager
+        self.trajectory_exporter = trajectory_exporter
         self.bundle = bundle or MultiAgentFactory.create_default_bundle(
             cache_manager=cache_manager
         )
@@ -46,7 +49,18 @@ class MultiAgentFacade:
             assumptions=assumptions,
             report_type=report_type,
         )
-        return self._format_result(state, result)
+        payload = self._format_result(state, result)
+        if self.trajectory_exporter is not None:
+            artifact = self.trajectory_exporter.export(
+                session_id=state.session_id,
+                payload=payload,
+            )
+            payload["trajectory_artifact"] = {
+                "artifact_id": artifact.artifact_id,
+                "relative_path": artifact.relative_path,
+                "sha256": artifact.sha256,
+            }
+        return payload
 
     def _build_state(
         self,

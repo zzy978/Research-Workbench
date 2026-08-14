@@ -98,6 +98,14 @@ class WorkerCoordinator:
             elif any(status == "failed" for status in node_status):
                 state.plan.status = "failed"
 
+        sequence = signal.execution_sequence or list(task_map.keys())
+        ordered_ids = {task_id: index for index, task_id in enumerate(sequence)}
+        results.sort(key=lambda record: (ordered_ids.get(record.task_id, len(ordered_ids)), record.created_at, record.record_id))
+        result_ids = {record.record_id for record in results}
+        prior_records = [record for record in state.execution_records if record.record_id not in result_ids]
+        state.execution_records = prior_records + results
+        if state.execution_context is not None:
+            state.execution_context.completed_task_ids.sort(key=lambda task_id: ordered_ids.get(task_id, len(ordered_ids)))
         return results
 
     def _resolve_execution_mode(self, requested_mode: str) -> str:
@@ -166,6 +174,7 @@ class WorkerCoordinator:
         max_workers = min(self.max_parallel_workers, max(1, len(pending)))
         inflight: Dict[object, str] = {}
         task_status: Dict[str, str] = {task_id: "pending" for task_id in pending}
+        sequence_index = {task_id: index for index, task_id in enumerate(sequence)}
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             while pending or inflight:
@@ -184,13 +193,11 @@ class WorkerCoordinator:
                     dependency_ok, dependency_error, failure_reason = self._check_dependencies(task, state)
                     if dependency_ok:
                         future = executor.submit(
-                            self._execute_single_task,
-                            state=state,
+                            self._execute_isolated_task,
+                            shared_state=state,
                             signal=signal,
                             task=task,
                             task_map=task_map,
-                            results=results,
-                            skip_dependency_check=True,
                         )
                         inflight[future] = task_id
                         task_status[task_id] = "running"
@@ -218,11 +225,13 @@ class WorkerCoordinator:
 
                 if inflight:
                     done, _ = wait(inflight.keys(), return_when=FIRST_COMPLETED)
+                    completed_batch = []
                     for future in done:
                         task_id = inflight.pop(future)
                         task = task_map[task_id]
                         try:
-                            success, _ = future.result()
+                            success, _reason, isolated_state, isolated_records = future.result()
+                            completed_batch.append((task_id, success, isolated_state, isolated_records))
                         except Exception as exc:  # noqa: BLE001
                             _LOGGER.exception("任务执行异常: task_id=%s error=%s", task_id, exc)
                             failure_record = self._create_failure_record(
@@ -233,9 +242,22 @@ class WorkerCoordinator:
                             )
                             results.append(failure_record)
                             success = False
-
-                        task_status[task_id] = "completed" if success else "failed"
+                            task_status[task_id] = "failed"
                         scheduled_this_round = True
+
+                    # Workers never mutate the shared state. The coordinator merges a
+                    # completed batch in plan order, making checkpoints deterministic.
+                    for task_id, success, isolated_state, isolated_records in sorted(
+                        completed_batch, key=lambda item: sequence_index[item[0]]
+                    ):
+                        self._merge_isolated_state(
+                            shared_state=state,
+                            isolated_state=isolated_state,
+                            task_id=task_id,
+                            records=isolated_records,
+                        )
+                        results.extend(isolated_records)
+                        task_status[task_id] = "completed" if success else "failed"
                     continue
 
                 if not scheduled_this_round:
@@ -254,6 +276,84 @@ class WorkerCoordinator:
                     break
 
         return results
+
+    def _execute_isolated_task(
+        self,
+        *,
+        shared_state: PlanExecuteState,
+        signal: PlanExecutionSignal,
+        task: TaskNode,
+        task_map: Dict[str, TaskNode],
+    ) -> Tuple[bool, Optional[str], PlanExecuteState, List[ExecutionRecord]]:
+        """Execute one worker against a deep state snapshot, never shared state."""
+        isolated_state = shared_state.model_copy(deep=True)
+        isolated_results: List[ExecutionRecord] = []
+        success, reason = self._execute_single_task(
+            state=isolated_state,
+            signal=signal,
+            task=task.model_copy(deep=True),
+            task_map={key: value.model_copy(deep=True) for key, value in task_map.items()},
+            results=isolated_results,
+            skip_dependency_check=True,
+        )
+        return success, reason, isolated_state, isolated_results
+
+    def _merge_isolated_state(
+        self,
+        *,
+        shared_state: PlanExecuteState,
+        isolated_state: PlanExecuteState,
+        task_id: str,
+        records: List[ExecutionRecord],
+    ) -> None:
+        """Apply a worker's local delta on the coordinator thread."""
+        existing_record_ids = {record.record_id for record in shared_state.execution_records}
+        for record in records:
+            if record.record_id not in existing_record_ids:
+                shared_state.execution_records.append(record)
+                existing_record_ids.add(record.record_id)
+
+        shared_context = shared_state.execution_context
+        local_context = isolated_state.execution_context
+        if shared_context is not None and local_context is not None:
+            shared_context.retrieval_cache.update(local_context.retrieval_cache)
+            shared_context.intermediate_results.update(local_context.intermediate_results)
+            shared_context.evidence_registry.update(local_context.evidence_registry)
+            shared_context.reflection_retry_counts.update(local_context.reflection_retry_counts)
+
+            for completed_id in local_context.completed_task_ids:
+                if completed_id not in shared_context.completed_task_ids:
+                    shared_context.completed_task_ids.append(completed_id)
+
+            existing_calls = {
+                (str(item.get("task_id")), str(item.get("tool_name")), str(item.get("timestamp")))
+                for item in shared_context.tool_call_history
+            }
+            for item in local_context.tool_call_history:
+                identity = (str(item.get("task_id")), str(item.get("tool_name")), str(item.get("timestamp")))
+                if identity not in existing_calls:
+                    shared_context.tool_call_history.append(item)
+                    existing_calls.add(identity)
+
+            existing_errors = {
+                (str(item.get("task_id")), str(item.get("reason")), str(item.get("error")))
+                for item in shared_context.errors
+            }
+            for item in local_context.errors:
+                identity = (str(item.get("task_id")), str(item.get("reason")), str(item.get("error")))
+                if identity not in existing_errors:
+                    shared_context.errors.append(item)
+                    existing_errors.add(identity)
+
+            shared_context.updated_at = local_context.updated_at
+
+        if shared_state.plan is not None and isolated_state.plan is not None:
+            local_node = next(
+                (node for node in isolated_state.plan.task_graph.nodes if node.task_id == task_id),
+                None,
+            )
+            if local_node is not None:
+                shared_state.plan.update_task_status(task_id, local_node.status)
 
     def _execute_single_task(
         self,

@@ -26,9 +26,14 @@ def run_query(agent_name: str, query: str, thread_id: str) -> None:
 
 
 def main() -> None:
-    agent_name = "deep_research"
-    query = "急性脑⾎管病吃什么药？写一份研究报告"
-    thread_id = f"{agent_name}_{int(time.time())}"
+    parser = argparse.ArgumentParser(description="Run an existing GraphRAG agent smoke query")
+    parser.add_argument("query", nargs="?", default="急性脑⾎管病吃什么药？写一份研究报告")
+    parser.add_argument("--agent", choices=sorted(AGENT_FACTORIES), default="deep_research")
+    parser.add_argument("--thread-id", default=None)
+    args = parser.parse_args()
+    agent_name = args.agent
+    query = args.query
+    thread_id = args.thread_id or f"{agent_name}_{int(time.time())}"
     print(f"Started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     run_query(agent_name, query, thread_id)
 
