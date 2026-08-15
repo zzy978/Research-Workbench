@@ -53,11 +53,11 @@ async def run_persistent_query(
         )
         provider = create_default_router().for_mode(source)
 
-        def workflow_factory(context):
+        def workflow_factory(context, events=None):
             if workflow is WorkflowMode.DEEP_RESEARCH:
                 agent = DeepResearchAgent(use_deeper_tool=True, retrieval_provider=provider, run_id=context.run_id)
                 agents.append(agent)
-                return DeepResearchDriver(context, agent)
+                return DeepResearchDriver(context, agent, events=events)
             bundle = MultiAgentFactory.create_default_bundle(retrieval_provider=provider)
             return PlanExecuteReportDriver(context, bundle.orchestrator)
 

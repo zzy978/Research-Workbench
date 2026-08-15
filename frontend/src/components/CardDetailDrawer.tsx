@@ -1,0 +1,198 @@
+import { useEffect, useRef } from "react";
+import { motion } from "motion/react";
+import { Evidence, Report, Run } from "../types/api";
+import { ReportView } from "./ReportView";
+import { STAGES, VERIFICATION_LABELS } from "./stageMeta";
+import { StageFeed } from "./stageFeed";
+
+interface CardDetailDrawerProps {
+  stageId: string;
+  run: Run | null;
+  feed: StageFeed;
+  report?: Report | null;
+  evidence: Evidence[];
+  onEvidence: (item: Evidence) => void;
+  onClose: () => void;
+}
+
+function IterationList({ feed }: { feed: StageFeed }) {
+  const listRef = useRef<HTMLDivElement>(null);
+  const rows = [...feed.iterations];
+  const running = feed.runningIteration;
+  const live = feed.liveSearches.filter((s) => s.iteration_index === running);
+  const hasLive = running != null && !rows.some((entry) => entry.index === running);
+
+  // 新迭代到达时自动滚动到底部
+  useEffect(() => {
+    if (!listRef.current) return;
+    const frame = requestAnimationFrame(() => listRef.current?.scrollTo({ top: listRef.current.scrollHeight }));
+    return () => cancelAnimationFrame(frame);
+  }, [rows.length, live.length]);
+
+  return <div className="drawer-iter-list" ref={listRef}>
+    {rows.length === 0 && !hasLive && <div className="drawer-empty">等待深度研究迭代开始…</div>}
+    {rows.map((entry) => (
+      <div key={entry.index} className="iter-block">
+        <div className="iter-block-head">
+          <span className="iter-block-title">第 {entry.index + 1} 轮迭代</span>
+          <span className="iter-block-meta">{entry.queries.length} 次搜索 · {entry.total_results} 条结果{entry.answer_char_count != null ? ` · 答案 ${entry.answer_char_count} 字符` : ""}</span>
+        </div>
+        {entry.queries.map((query, index) => (
+          <div key={index} className="iter-query">
+            <span className="iter-query-text">"{query.query}"</span>
+            <span className={`iter-query-meta ${query.found_useful ? "ok" : "miss"}`}>{query.result_count} 条{query.found_useful ? " · 有用" : " · 未命中"}</span>
+          </div>
+        ))}
+        {entry.info_snippets.length > 0 && (
+          <div className="iter-snippets">
+            {entry.info_snippets.map((snippet, index) => <span key={index} className="iter-snippet">{snippet}</span>)}
+          </div>
+        )}
+      </div>
+    ))}
+    {hasLive && (
+      <div className="iter-block is-live">
+        <div className="iter-block-head">
+          <span className="iter-block-title">第 {running! + 1} 轮迭代</span>
+          <span className="pulse-dot" />
+        </div>
+        {live.map((search, index) => (
+          <div key={index} className="iter-query">
+            <span className="iter-query-text">"{search.query}"</span>
+            <span className="iter-query-meta ok">搜索中…</span>
+          </div>
+        ))}
+        {live.length === 0 && <div className="iter-query"><span className="iter-query-text">正在思考检索方向…</span></div>}
+      </div>
+    )}
+  </div>;
+}
+
+function ToolList({ feed }: { feed: StageFeed }) {
+  return <div className="drawer-tool-list">
+    {feed.tools.length === 0 && <div className="drawer-empty">暂无工具调用</div>}
+    {[...feed.tools].reverse().map((tool, index) => (
+      <div key={index} className="tool-row">
+        <span className="tool-name">{tool.tool_name}</span>
+        {tool.query && <span className="tool-query">"{tool.query}"</span>}
+        {tool.result_count != null && <span className="tool-count">{tool.result_count} 条结果</span>}
+      </div>
+    ))}
+  </div>;
+}
+
+export function CardDetailDrawer({ stageId, run, feed, report, evidence, onEvidence, onClose }: CardDetailDrawerProps) {
+  const stage = STAGES.find((item) => item.id === stageId) ?? STAGES[2];
+  return <motion.div className="drawer-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }} onClick={onClose}>
+    <motion.aside
+      className="card-detail-drawer"
+      initial={{ x: "100%" }}
+      animate={{ x: 0 }}
+      exit={{ x: "100%" }}
+      transition={{ type: "spring", stiffness: 320, damping: 32 }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <header className="card-detail-head">
+        <div className="card-detail-title">
+          <span className="stage-icon">{stage.icon}</span>
+          <h2>{stage.label}</h2>
+          <span className={`stage-state is-${run?.status}`}>{run?.status ?? ""}</span>
+        </div>
+        <button className="icon-button close" onClick={onClose} aria-label="关闭">×</button>
+      </header>
+
+      {run?.error_message && <div className="inline-error">{run.error_code ? `${run.error_code}: ` : ""}{run.error_message}</div>}
+
+      {stageId === "context_building" && (
+        <div className="drawer-body">
+          <p className="drawer-desc">检索历史会话与语义记忆，为研究构建上下文基础。</p>
+          <dl className="drawer-stats">
+            <div><dt>复用消息</dt><dd>{feed.contextInfo?.usedMessages ?? 0}</dd></div>
+            <div><dt>语义记忆</dt><dd>{feed.contextInfo?.memories ?? 0}</dd></div>
+            <div><dt>采集证据</dt><dd>{feed.contextCount}</dd></div>
+          </dl>
+        </div>
+      )}
+
+      {stageId === "planning" && (
+        <div className="drawer-body">
+          <p className="drawer-desc">研究计划由多阶段任务构成，任务逐个执行、失败自动重试。</p>
+          {feed.planTasks.length === 0 && <div className="drawer-empty">等待计划生成…</div>}
+          {feed.planTasks.map((task) => (
+            <div key={task.task_id} className="plan-task">
+              <span className="plan-task-type">{task.task_type}</span>
+              <span className="plan-task-desc">{task.description}</span>
+              <span className="plan-task-id">{task.task_id}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {stageId === "executing" && (
+        <div className="drawer-body">
+          <section className="drawer-section"><h3>迭代过程</h3><IterationList feed={feed} /></section>
+          <section className="drawer-section"><h3>工具调用</h3><ToolList feed={feed} /></section>
+          <section className="drawer-section"><h3>证据采集</h3>
+            {evidence.length === 0 && <div className="drawer-empty">尚未采集到证据</div>}
+            {[...evidence].sort((a, b) => b.created_at.localeCompare(a.created_at)).map((item) => (
+              <button key={item.evidence_id} type="button" className="evidence-card" onClick={() => onEvidence(item)}>
+                <div className="evidence-card-body">
+                  <span className="evidence-title">{item.title || "未命名来源"}</span>
+                  <span className="evidence-summary">{item.summary}</span>
+                  <span className="evidence-meta">
+                    <span className={`source-badge ${item.source_mode}`}>{item.source_mode === "web" ? "Web" : "私有库"}</span>
+                    <span className="evidence-provider">{item.provider}</span>
+                    <span className="evidence-score">{item.score.toFixed(2)}</span>
+                  </span>
+                </div>
+              </button>
+            ))}
+          </section>
+        </div>
+      )}
+
+      {stageId === "reporting" && (
+        <div className="drawer-body">
+          {!report?.content && <div className="drawer-empty">报告生成中…</div>}
+          <ReportView report={report} evidence={evidence} onEvidence={onEvidence} />
+        </div>
+      )}
+
+      {stageId === "verifying" && (
+        <div className="drawer-body">
+          <p className="drawer-desc">按 7 项完成门禁逐项核查报告的可信度，任一失败则进入修复循环。</p>
+          <div className="verification-chips">
+            {feed.verification.length === 0 && <span className="pending">检查中…</span>}
+            {feed.verification.map((check) => (
+              <span key={check.kind} className={check.passed === true ? "pass" : check.passed === false ? "fail" : "pending"}>
+                {check.passed === true ? "✓" : check.passed === false ? "!" : "·"} {VERIFICATION_LABELS[check.kind] ?? check.kind}
+              </span>
+            ))}
+          </div>
+          {feed.verifyFailures.length > 0 && (
+            <div className="verify-failures">
+              {feed.verifyFailures.map((failure, index) => (
+                <div key={index} className="verify-failure">
+                  <span className="verify-failure-kind">{VERIFICATION_LABELS[failure.kind] ?? failure.kind}</span>
+                  {failure.message && <span className="verify-failure-msg">{failure.message}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {stageId === "completed" && (
+        <div className="drawer-body">
+          <p className="drawer-desc">研究完成，报告通过全部验证门禁。点击证据引用可查看来源详情。</p>
+          <dl className="drawer-stats">
+            <div><dt>迭代轮次</dt><dd>{feed.iterations.length + (feed.runningIteration != null ? 1 : 0)}</dd></div>
+            <div><dt>工具调用</dt><dd>{feed.tools.length}</dd></div>
+            <div><dt>采集证据</dt><dd>{feed.contextCount}</dd></div>
+          </dl>
+          {report?.content && <ReportView report={report} evidence={evidence} onEvidence={onEvidence} />}
+        </div>
+      )}
+    </motion.aside>
+  </motion.div>;
+}

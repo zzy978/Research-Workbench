@@ -212,7 +212,7 @@ async def test_required_contract_failure_never_completes(database):
 async def test_runtime_happy_path_persists_events_checkpoints_contract_and_message(database, tmp_path):
     FakeDriver.execute_calls = 0
     _, run = await create_run(database)
-    result = await build_runtime(database, tmp_path, lambda ctx: FakeDriver(ctx)).execute_run(run.run_id)
+    result = await build_runtime(database, tmp_path, lambda ctx, events=None: FakeDriver(ctx)).execute_run(run.run_id)
     assert result.status is RunStatus.COMPLETED
     assert FakeDriver.execute_calls == 1
     events = await EventRepository(database).list_after(run.run_id)
@@ -230,7 +230,7 @@ async def test_runtime_happy_path_persists_events_checkpoints_contract_and_messa
 @pytest.mark.asyncio
 async def test_citation_failure_is_locally_repaired_with_bounded_retry(database, tmp_path):
     _, run = await create_run(database)
-    result = await build_runtime(database, tmp_path, lambda ctx: FakeDriver(ctx, dangling=True)).execute_run(run.run_id)
+    result = await build_runtime(database, tmp_path, lambda ctx, events=None: FakeDriver(ctx, dangling=True)).execute_run(run.run_id)
     assert result.status is RunStatus.COMPLETED
     events = await EventRepository(database).list_after(run.run_id)
     assert any(event.event_type == "run.retrying" for event in events)
@@ -242,7 +242,7 @@ async def test_cancel_stops_before_new_tool_call(database, tmp_path):
     FakeDriver.execute_calls = 0
     _, run = await create_run(database)
     assert await RunRepository(database).request_cancel(run.run_id)
-    result = await build_runtime(database, tmp_path, lambda ctx: FakeDriver(ctx)).execute_run(run.run_id)
+    result = await build_runtime(database, tmp_path, lambda ctx, events=None: FakeDriver(ctx)).execute_run(run.run_id)
     assert result.status is RunStatus.CANCELLED
     assert FakeDriver.execute_calls == 0
 
@@ -250,7 +250,7 @@ async def test_cancel_stops_before_new_tool_call(database, tmp_path):
 @pytest.mark.asyncio
 async def test_tool_budget_exhaustion_is_terminal_and_not_completed(database, tmp_path):
     _, run = await create_run(database, budget=BudgetLimits(max_tool_calls=1).model_dump())
-    result = await build_runtime(database, tmp_path, lambda ctx: FakeDriver(ctx, tool_count=2)).execute_run(run.run_id)
+    result = await build_runtime(database, tmp_path, lambda ctx, events=None: FakeDriver(ctx, tool_count=2)).execute_run(run.run_id)
     assert result.status is RunStatus.BUDGET_EXHAUSTED
     assert not await ContractRepository(database).required_checks_passed(run.run_id)
 
@@ -259,7 +259,7 @@ async def test_tool_budget_exhaustion_is_terminal_and_not_completed(database, tm
 async def test_retryable_transport_error_retries_same_execution_once(database, tmp_path):
     RetryOnceDriver.attempts = 0
     _, run = await create_run(database)
-    result = await build_runtime(database, tmp_path, lambda ctx: RetryOnceDriver(ctx)).execute_run(run.run_id)
+    result = await build_runtime(database, tmp_path, lambda ctx, events=None: RetryOnceDriver(ctx)).execute_run(run.run_id)
     assert result.status is RunStatus.COMPLETED
     assert RetryOnceDriver.attempts == 2
     events = await EventRepository(database).list_after(run.run_id)
@@ -278,7 +278,7 @@ async def test_interrupted_executing_checkpoint_resumes_without_reexecuting_comp
     )
     await CheckpointManager(CheckpointRepository(database)).save(context, "executing")
     await RunRepository(database).update_status(run.run_id, status="interrupted", current_stage="interrupted")
-    result = await build_runtime(database, tmp_path, lambda ctx: FakeDriver(ctx)).execute_run(run.run_id)
+    result = await build_runtime(database, tmp_path, lambda ctx, events=None: FakeDriver(ctx)).execute_run(run.run_id)
     assert result.status is RunStatus.COMPLETED
     assert FakeDriver.execute_calls == 0
 
@@ -286,7 +286,7 @@ async def test_interrupted_executing_checkpoint_resumes_without_reexecuting_comp
 @pytest.mark.asyncio
 async def test_final_assistant_message_is_idempotent(database, tmp_path):
     _, run = await create_run(database)
-    runtime = build_runtime(database, tmp_path, lambda ctx: FakeDriver(ctx))
+    runtime = build_runtime(database, tmp_path, lambda ctx, events=None: FakeDriver(ctx))
     result = await runtime.execute_run(run.run_id)
     assert result.status is RunStatus.COMPLETED
     message, created = await RunRepository(database).complete_verified(run.run_id, assistant_content=result.report, usage={})

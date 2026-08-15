@@ -70,14 +70,14 @@ class RunService:
     async def _execute(self, run_id: str):
         agents: list[Any] = []
 
-        def workflow_factory(context):
+        def workflow_factory(context, events=None):
             if self._external_factory is not None:
-                return self._external_factory(context)
+                return self._external_factory(context, events)
             provider = self._router.for_mode(context.source_mode)
             if context.workflow_mode is WorkflowMode.DEEP_RESEARCH:
                 agent = DeepResearchAgent(use_deeper_tool=True, retrieval_provider=provider, run_id=context.run_id)
                 agents.append(agent)
-                return DeepResearchDriver(context, agent)
+                return DeepResearchDriver(context, agent, events=events)
             bundle = MultiAgentFactory.create_default_bundle(retrieval_provider=provider)
             return PlanExecuteReportDriver(context, bundle.orchestrator)
 

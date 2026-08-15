@@ -21,7 +21,7 @@ from graphrag_agent.persistence.repositories import (
     EvidenceRepository, MessageRepository, PlanTaskToolRepository, RunRepository,
 )
 
-WorkflowFactory = Callable[[RunContext], Any]
+WorkflowFactory = Callable[[RunContext, EventBus], Any]
 
 
 class RunCancelled(RuntimeError):
@@ -90,7 +90,7 @@ class HarnessRuntime:
                     })
                 else:
                     context.resolved_query = context.resolved_query or context.original_query
-            driver = self.workflow_factory(context)
+            driver = self.workflow_factory(context, self.events)
             if inspect.isawaitable(driver):
                 driver = await driver
             if context.status is RunStatus.CONTEXT_BUILDING:
@@ -111,7 +111,18 @@ class HarnessRuntime:
                     context.workflow_state = driver.snapshot()
                     await self._persist_plan(context, driver)
                     await self.checkpoints.save(context, context.status.value)
-                    await self.events.publish(run_id, "plan.revised" if failures else "plan.created", stage=context.status.value, payload={"plan_version": context.plan_version})
+                    plan_extra: dict[str, Any] = {}
+                    plan_record = driver.plan_record()
+                    if plan_record is not None:
+                        _, plan_tasks = plan_record
+                        plan_extra = {
+                            "task_count": len(plan_tasks),
+                            "tasks": [
+                                {"task_id": str(t.get("task_id", "")), "task_type": str(t.get("task_type", "")), "description": str(t.get("description", ""))[:120]}
+                                for t in plan_tasks
+                            ],
+                        }
+                    await self.events.publish(run_id, "plan.revised" if failures else "plan.created", stage=context.status.value, payload={"plan_version": context.plan_version, **plan_extra})
                     await self._transition(context, RunStatus.EXECUTING)
 
                 elif context.status in {RunStatus.EXECUTING, RunStatus.RETRYING}:
@@ -276,7 +287,12 @@ class HarnessRuntime:
                 if self.trajectory:
                     await self.trajectory.prepare_tool_call(tool_call_id=call.tool_call_id, run_id=context.run_id, task_id=record.task_id, tool_name=call.tool_name, source_mode=context.source_mode.value, args=call.args)
                     await self.trajectory.complete_tool_call(call.tool_call_id, result=call.result, error_code="TOOL_FAILED" if call.status == "failed" else None)
-                await self.events.publish(context.run_id, "tool.completed" if call.status != "failed" else "tool.failed", stage="executing", payload={"task_id": record.task_id, "tool_call_id": call.tool_call_id, "tool_name": call.tool_name})
+                tool_payload: dict[str, Any] = {"task_id": record.task_id, "tool_call_id": call.tool_call_id, "tool_name": call.tool_name}
+                if isinstance(call.args, dict) and call.args.get("query"):
+                    tool_payload["query"] = str(call.args["query"])[:300]
+                if isinstance(call.result, dict):
+                    tool_payload["result_count"] = len(call.result.get("result_ids", []) or [])
+                await self.events.publish(context.run_id, "tool.completed" if call.status != "failed" else "tool.failed", stage="executing", payload=tool_payload)
 
         for task_id, tool_call_id, provider, result in driver.evidence_results():
             saved = await self.evidence_ledger.record_results(run_id=context.run_id, task_id=task_id, tool_call_id=tool_call_id, provider=str(provider), results=[result])

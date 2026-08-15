@@ -1,141 +1,185 @@
-# DeepResearch HybridRAG Agent — Local MVP
+# DeepResearch HybridRAG Agent（Hermes Inspired Local MVP）
 
-这是一个本地单机研究 Agent：保留既有 GraphRAG、DeepResearch 与 Plan–Execute–Report，同时增加持久 Session/Run、Hermes 风格 Harness、Tavily、React/FastAPI、多轮 Memory 和受控 Skill 自进化。
+一个本地部署的多智能体深度研究系统：结合**私有知识图谱（GraphRAG）**与**联网搜索（Tavily）**双信息源，参考 [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) 引入 Harness Runtime、四层持久化 Memory 与受控自进化（Skills）闭环，并通过 React 前端 + FastAPI 后端提供完整的聊天式研究体验。
 
-## 能力
+> 设计文档见 `HERMES_INSPIRED_LOCAL_MVP_DESIGN.md`，阶段开发记录见 `progress.md`，验收结果见 `docs/acceptance/results.md`。
 
-- 每条消息固定选择 `graphrag`（私有库）或 `web`（Tavily），同一 Run 不跨源降级。
-- DeepResearch 与 Plan–Execute–Report 都经过 `Context → Plan → Execute → Report → Verify`；required Completion Contract 未全过不会进入 `completed`。
-- SQLite WAL 持久化 Session、Message、Run、Event、Checkpoint、Evidence、Memory、Skill 与审计；大对象在 `data/artifacts/`。
-- 多轮追问、滚动摘要、FTS5 episodic memory、带 provenance 的 semantic memory、渐进披露 procedural Skill。
-- 合格复杂轨迹只生成 candidate；Skill 必须 lint、安全扫描、离线 eval 和前端人工 Promote 后才能参与新 Run，并支持 rollback。
-- React 页面提供聊天、来源选择、进度/SSE、报告、引用、Memory、Skills 与系统状态。
+---
 
-## 环境要求
+## 项目概述
 
-- Python 3.11（当前代码兼容 Python 3.10）
+系统围绕三个核心概念构建：
+
+- **Session（会话）**——多轮对话的长期容器，保存消息历史、摘要、来源选择与关联运行，支持服务重启后继续聊天。
+- **Run（运行）**——一条用户消息触发的一次研究任务，具有独立状态、信息源、预算、计划、证据、报告与 checkpoint，支持中断恢复与取消。
+- **Harness（编排运行时）**——统一包裹 DeepResearch、Fusion 与多智能体 Plan–Execute–Report 三种工作流，提供 Completion Contract、预算控制、事件流与持久化。
+
+前端每次发送消息须二选一指定信息源（`graphrag` 私有库 / `web` 联网搜索），本轮检索只允许调用选定来源，报告中每条引用明确标注 `[私有库]` 或 `[Web]`。
+
+### 技术栈
+
+| 层 | 技术 |
+|---|---|
+| 后端 | Python 3.10/3.11、FastAPI、SSE（sse-starlette）、Uvicorn、SQLAlchemy + SQLite（aiosqlite）、Alembic |
+| 核心引擎 | LangGraph、LangChain、Tavily、GraphRAG（Neo4j 5.22 + APOC + GDS）、HanLP、Faiss、SentenceTransformers |
+| 前端 | React 18 + TypeScript + Vite、zustand、react-markdown、motion |
+| 部署 | Docker Compose（Neo4j）、本地单机单 worker |
+
+---
+
+## 核心亮点
+
+1. **双信息源二选一**：统一 `RetrievalProvider` 抽象，`graphrag`（私有知识图谱）与 `web`（Tavily）每轮严格互斥；跨轮可切换，来源切换不污染证据链。
+2. **Harness Runtime + Agent Loop**：三类工作流（DeepResearch / Fusion / Plan–Execute–Report）统一纳入运行时，附带 Completion Contract 逐项验证、墙钟/调用/Token 预算、错误重试分类、事件总线与审计轨迹。
+3. **多智能体 Plan–Execute–Report**：Planner 规划 → 并行/串行 Worker 执行（含 Reflection 反思重试）→ Reporter 写作；支持一致性检查与 Map-Reduce 长文档模式；并行 Worker 使用隔离状态快照，Coordinator 单线程归并。
+4. **四层持久化 Memory**：会话摘要、情节（episodic）、语义（semantic）记忆与上下文组装器；支持代词/省略式追问与跨会话召回，服务重启后依然有效。
+5. **受控自进化（Skills）**：成功运行轨迹蒸馏为候选 Skill → 离线评测 → **人工门禁 promote** 才生效 → 版本管理与一键回滚；未通过门禁的候选不会进入运行链。
+6. **崩溃恢复**：Run/Event/Checkpoint 持久化，`executing` 状态中断后服务重启可自动恢复，前端通过 SSE 事件回放补齐进度。
+7. **可观测性**：SSE 增量事件流（计划、工具调用、证据、阶段状态）实时推送，报告与引用逐条对应 Evidence Ledger，取消/恢复/澄清接口完备。
+8. **本地 MVP 交付**：SQLite + Neo4j + 文件全部落在项目 `data/` 目录；8 个端到端场景验收 PASS，离线门禁 `70 passed`。
+
+---
+
+## 快速启动
+
+### 1. 环境要求
+
+- Python 3.10 或 3.11
 - Node.js 20 LTS
-- Docker Desktop / Docker Compose（用于 Neo4j 或整套发行启动）
-- Neo4j 5.22（APOC + Graph Data Science）
-- OpenAI/兼容 LLM 与 Embedding Key；Web 模式另需 Tavily Key
+- Docker（仅 `graphrag` 私有库模式需要，用于启动 Neo4j）
 
-所有服务默认只监听 `127.0.0.1`，FastAPI 必须保持 `FASTAPI_WORKERS=1`。
+### 2. 配置环境变量
 
-## 配置
-
-```powershell
-Copy-Item .env.example .env
+```bash
+cp .env.example .env
 ```
 
-编辑 `.env`，至少配置：
+按需修改 `.env`（密钥只保存在本机 `.env`，不提交仓库）：
 
-- `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_LLM_MODEL`、`OPENAI_EMBEDDINGS_MODEL`
-- `NEO4J_URI`、`NEO4J_USERNAME`、`NEO4J_PASSWORD`
-- 使用 Web 时配置 `TAVILY_API_KEY`
+| 配置 | 说明 |
+|---|---|
+| `OPENAI_API_KEY` | **必填**，OpenAI 兼容 API 密钥 |
+| `OPENAI_BASE_URL` | 兼容服务地址，默认 `http://localhost:13000/v1` |
+| `OPENAI_LLM_MODEL` / `OPENAI_EMBEDDINGS_MODEL` | 生成模型 / 向量模型 |
+| `TAVILY_API_KEY` | **联网模式必填**（Tavily） |
+| `NEO4J_URI` / `NEO4J_USERNAME` / `NEO4J_PASSWORD` | **私有库模式必填**，Neo4j 连接 |
+| `APP_DATABASE_URL` | SQLite 路径，默认 `./data/app.db` |
+| `APP_PORT` / `FRONTEND_ORIGINS` | 服务端口与 CORS 白名单 |
 
-不要把 `.env`、Key、数据库或 artifact 提交到 Git。若后端运行在容器而兼容 LLM 在宿主机，`OPENAI_BASE_URL` 应使用 `host.docker.internal`，不能使用容器内的 `localhost`。
+完整配置项及说明见 `.env.example` 注释（Harness 预算、检索参数、多智能体编排、缓存、图谱构建等均有覆盖）。
 
-## 开发模式启动
+### 3. 安装依赖
 
-```powershell
+```bash
 python -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-Set-Location frontend
-npm.cmd ci
-Set-Location ..
-docker compose up -d neo4j
-python -m alembic upgrade head
+.venv/Scripts/activate            # Windows；Linux/macOS 用 source .venv/bin/activate
+pip install -r requirements.txt
+
+cd frontend
+npm install
+cd ..
 ```
 
-分别启动两个终端：
+### 4. 启动 Neo4j（私有库模式）
 
-```powershell
+```bash
+docker compose up -d neo4j
+```
+
+### 5. 初始化数据库并启动后端
+
+```bash
+python -m alembic upgrade head
 python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --workers 1
 ```
 
-```powershell
-Set-Location frontend
-npm.cmd run dev -- --host 127.0.0.1
+### 6. 启动前端
+
+```bash
+cd frontend
+npm run dev
 ```
 
-也可运行 `powershell -ExecutionPolicy Bypass -File scripts/start-local.ps1`，停止时运行 `scripts/stop-local.ps1`。打开 <http://127.0.0.1:5173>；OpenAPI 位于 <http://127.0.0.1:8000/docs>。
+浏览器访问 `http://127.0.0.1:5173`，创建会话 → 选择信息源（私有库 / 联网搜索）→ 发送消息，即可观察实时研究进度与最终报告。
 
-## 一套命令发行启动
-
-```powershell
-docker compose up -d --build
-docker compose ps
-```
-
-前端：<http://127.0.0.1:5173>；后端健康：<http://127.0.0.1:8000/api/v1/health>。Compose 持久化 `data/`、`skills/`、`files/`、`cache/` 和 Neo4j named volumes。前端 Nginx 提供 SPA fallback 与 `/api/` 反向代理。
-
-## 首次知识库构建与旧 CLI
-
-把文档放入 `files/` 后：
+### Windows 一键启动
 
 ```powershell
-python build_knowledge_graph.py
-python search_without_stream.py "你的问题" --agent deep_research --source-mode graphrag
-python search_without_stream.py "你的问题" --agent fusion --source-mode web
+.\scripts\start-local.ps1          # 含 Neo4j 启动、Alembic 迁移、前后端拉起
+.\scripts\stop-local.ps1           # 停止本地进程
 ```
 
-旧 `ask()`/`process_query()` 兼容入口保留；浏览器/FastAPI 主链使用持久 Harness。
+### 运行测试
 
-## Memory 与 Skills
-
-- Working：Run checkpoint；Episodic：消息/Run/Event + FTS5；Semantic：候选/active/冲突/过期；Procedural：版本化 `skills/research/*`。
-- Memory 页面可以编辑、确认、拒绝、过期、软删除并查看 provenance。事实类候选只有合格 Run 才能自动提炼，且不会自动 active。
-- Skills 页面执行 candidate → evaluate → Promote → rollback。候选不能扩大 `Run.source_mode` 或 ToolPolicy 权限，也不会修改源码或提交 Git。
-
-## 迁移、备份与恢复
-
-```powershell
-python -m alembic current
-python -m alembic upgrade head
+```bash
+python -m pytest -q                # 后端离线门禁（当前 70 passed）
+cd frontend && npm run build       # 前端类型检查 + 生产构建
 ```
 
-备份 SQLite（使用在线 backup API）、artifacts、skills、files、cache；如指定 `-IncludeNeo4j`，脚本会短暂停止 Neo4j 并生成 dump：
+### 常用 API
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/backup-local.ps1
-powershell -ExecutionPolicy Bypass -File scripts/backup-local.ps1 -IncludeNeo4j
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/health`、`/api/v1/capabilities` | 健康检查与能力声明 |
+| POST/GET | `/api/v1/sessions` | 创建 / 列出会话 |
+| GET/PATCH/DELETE | `/api/v1/sessions/{id}` | 会话详情 / 更新 / 删除 |
+| POST | `/api/v1/sessions/{id}/messages` | 发送消息（202，触发 Run） |
+| GET | `/api/v1/runs/{id}`、`.../events`、`.../evidence`、`.../report` | Run 状态 / SSE 事件流 / 证据 / 报告 |
+| POST | `/api/v1/runs/{id}/cancel`、`/resume`、`/clarifications` | 取消 / 恢复 / 澄清 |
+| GET/PATCH/DELETE | `/api/v1/memories` | 记忆检索 / 编辑 / 删除 |
+| GET/POST | `/api/v1/skills`、`.../evaluate`、`.../promote`、`.../rollback` | Skill 查看 / 评测 / 启用 / 回滚 |
+
+---
+
+## 文件结构
+
+```
+.
+├── backend/                      # FastAPI 后端
+│   ├── app/
+│   │   ├── main.py               # 应用入口与路由注册
+│   │   ├── api/v1/               # health / sessions / runs / learning 路由
+│   │   ├── services/             # run_service、chat_service、event_stream（SSE）
+│   │   └── schemas/              # API 与持久化 DTO
+│   └── Dockerfile
+├── frontend/                     # React + Vite + TS 前端
+│   └── src/
+│       ├── pages/ChatPage.tsx    # 聊天主界面（会话侧栏、消息流、报告、看板）
+│       ├── components/           # ReportView、SessionSidebar、StageCard、CanvasBoard 等
+│       └── hooks/                # useRunEvents（SSE）、useStagePositions
+├── graphrag_agent/               # 核心引擎包
+│   ├── harness/                  # Runtime、Workflow、bootstrap、recovery、checkpoints、event_bus、policies、evidence、verifiers
+│   ├── agents/                   # DeepResearch / Fusion / multi_agent（planner、executor、reporter、integration）
+│   ├── search/                   # 检索工具集：local/global/hybrid/naive、deep_research_tool、tool_registry
+│   ├── retrieval/                # base、tavily_provider、graphrag_provider、router（统一 Provider）
+│   ├── memory/                   # episodic、semantic、session_summary、context_builder、service
+│   ├── evolution/                # SkillLoader、SkillRegistry、TrajectoryDistiller、Evaluator、Linter、Promotion
+│   ├── persistence/              # SQLite、ArtifactStore、repositories、Alembic 迁移
+│   ├── graph/                    # 知识图谱构建：extraction、indexing、processing、structure、community
+│   ├── pipelines/ingestion/      # 文档摄入（text_chunker、document_processor、file_reader）
+│   ├── integrations/build/       # 图谱索引构建（build_graph、build_chunk_index、增量更新）
+│   ├── models/                   # LLM / Embedding 配置与封装
+│   ├── config/                   # settings.py（全部环境变量）、prompts
+│   ├── community/                # 社区检测（leiden / sllpa）
+│   └── cache_manager/            # 模型与结果缓存
+├── tests/                        # 分阶段测试：acceptance / api / harness / memory / evolution / persistence / retrieval / models / smoke
+├── scripts/                      # start-local.ps1、stop-local.ps1、backup/restore、e2e-poll-check.ps1
+├── skills/                       # Skill 定义目录（SKILLS_ROOT）
+├── docs/acceptance/              # 验收矩阵与结果
+├── evals/                        # 基线场景结果与技能评测
+├── data/                         # 运行产物：app.db、artifacts（git 忽略）
+├── cache/                        # 模型与检索缓存（git 忽略）
+├── files/                        # 私有知识库文档目录（FILES_DIR）
+├── alembic.ini                   # 数据库迁移配置
+├── docker-compose.yaml           # Neo4j 服务编排
+├── pytest.ini / requirements.txt / .env.example
+└── progress.md                   # 阶段化开发记录
 ```
 
-恢复前停止后端。恢复会先保留现有 SQLite 为 `app.pre-restore-*.db`，校验备份内每个文件的 SHA-256 后覆盖同名数据：
+---
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/restore-local.ps1 -Archive backups\local-mvp-YYYYMMDD-HHMMSS.zip
-powershell -ExecutionPolicy Bypass -File scripts/restore-local.ps1 -Archive backups\local-mvp-YYYYMMDD-HHMMSS.zip -RestoreNeo4j
-```
+## 项目状态
 
-## 测试与验收
-
-离线测试必须先通过，之后才允许受控真实调用：
-
-```powershell
-python -m pytest -q
-python -m compileall -q graphrag_agent backend search_without_stream.py
-python scripts/scan_secrets.py frontend/dist data/acceptance
-Set-Location frontend
-npm.cmd run build
-```
-
-验收矩阵和记录位于 `docs/acceptance/`。真实 E2E 使用本机 `.env`，不得把输出中的 Key 写入报告；Web 查询优先复用缓存并严格控制调用次数。
-
-## 健康、降级与排障
-
-- `/api/v1/health`：分别报告 API、SQLite、LLM、Neo4j、Tavily；只返回 `configured` 和状态，不返回 Key。LLM/Neo4j 使用短 TCP 探测，Tavily 健康不产生搜索调用。
-- `/api/v1/capabilities`：Tavily 未配置时 Web 禁用但 GraphRAG 可用；Neo4j 不可连接时 GraphRAG 禁用但 Web 可用。
-- SQLite 不可写：启动迁移/建表失败，后端拒绝无持久化运行。
-- Tavily 401/403：检查 Key；429：Provider 尊重 `Retry-After`；5xx/timeout：有限退避，不切到 GraphRAG。
-- SSE 断线：页面按 event ID 重连并以 Run API 校准，不代表 Run 失败。
-- `budget_exhausted`：查看 Run 的 error、usage 和部分报告；新建 Run 前调整 `.env` 中对应 `RUN_MAX_*`。
-- Neo4j 容器：`docker compose logs neo4j`；后端：`docker compose logs backend`；前端：`docker compose logs frontend`。
-
-## 已知限制
-
-- 单用户、单机、单 FastAPI worker；不含认证、RBAC、多租户与公网部署。
-- 不自动混合 GraphRAG/Web；外部 Tavily 本身无法保证 exactly-once，恢复会复用已持久化的成功 tool_call。
-- Skill eval 是 2～5 个相关 fixture 的轻量门禁，不是统计显著性评测或自动持续进化平台。
-- 默认不展示模型隐藏思维链，只展示计划、状态、工具摘要、证据与验证结果。
+- 阶段 0–8 全部完成：基线冻结 → 领域模型 / SQLite / Artifact → 统一 RetrievalProvider 与 Tavily → Harness Runtime 与 Agent Loop → FastAPI + Session/SSE 与 React 前端 → 多层 context 与四层 Memory → Skills 与受控自进化 → 本地部署、轻量验收与交付。
+- 离线门禁：`python -m pytest -q` 当前 `70 passed`；前端 `tsc --noEmit` 与生产构建通过；Compose 校验通过。
+- 端到端场景：8 个场景（DeepResearch×GraphRAG/Tavily、PER×GraphRAG/Tavily、十轮对话与来源切换、中断恢复、Memory 召回、Skill 门禁等）全部 PASS，详见 `docs/acceptance/results.md`。

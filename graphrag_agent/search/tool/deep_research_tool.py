@@ -45,6 +45,7 @@ class DeepResearchTool(BaseSearchTool):
         self.run_id = run_id or f"legacy_{uuid.uuid4().hex}"
         self.provider_results = []
         self.provider_calls = []
+        self.progress_callback = None  # 由 DeepResearchDriver 注入，上报迭代进度事件
 
         # 关键词缓存
         self._keywords_cache = {}
@@ -97,6 +98,11 @@ class DeepResearchTool(BaseSearchTool):
         """设置处理链"""
         # 深度研究工具主要依赖于其他工具的功能和思考方法
         pass
+
+    async def _progress(self, kind: str, **extra) -> None:
+        """向驱动回调上报迭代进度（回调由 DeepResearchDriver 注入）"""
+        if self.progress_callback is not None:
+            await self.progress_callback({"kind": kind, **extra})
     
     def extract_keywords(self, query: str) -> Dict[str, List[str]]:
         """从查询中提取关键词"""
@@ -885,9 +891,10 @@ class DeepResearchTool(BaseSearchTool):
             # 发送迭代进度
             if iteration > 0:
                 yield f"\n\n**正在进行第{iteration + 1}轮思考**...\n\n"
-                    
+
             self._log(f"\n[深度研究] 开始第{iteration + 1}轮迭代")
-            
+            await self._progress("iteration", iteration_index=iteration)
+
             # 检查是否达到最大迭代次数
             if iteration >= self.max_iterations - 1:
                 summary_think = f"\n搜索次数已达上限。不允许继续搜索。\n"
@@ -1046,6 +1053,14 @@ class DeepResearchTool(BaseSearchTool):
                     self.thinking_engine.add_reasoning_step(f"\n没有找到与'{search_query}'相关的信息。请尝试使用不同的关键词进行搜索。\n")
                     self.thinking_engine.add_human_message(f"\n没有找到与'{search_query}'相关的信息。请尝试使用不同的关键词进行搜索。\n")
                     think += no_result_msg
+                    await self._progress(
+                        "search",
+                        iteration_index=iteration,
+                        query=search_query,
+                        result_count=0,
+                        found_useful=False,
+                        useful_info_preview=None,
+                    )
                     continue
                     
                 # 正常处理有结果的情况
@@ -1080,6 +1095,16 @@ class DeepResearchTool(BaseSearchTool):
                     self._log(no_useful_msg)
                     yield no_useful_msg
                     
+                # 上报本轮搜索的进度事件
+                await self._progress(
+                    "search",
+                    iteration_index=iteration,
+                    query=search_query,
+                    result_count=sum(len(kbinfos.get(k, [])) for k in ("chunks", "entities", "relationships")),
+                    found_useful=has_useful_info,
+                    useful_info_preview=(useful_info[:100] + ("..." if len(useful_info) > 100 else "")) if has_useful_info else None,
+                )
+
                 # 更新推理历史
                 self.thinking_engine.add_reasoning_step(summary_think)
                 self.thinking_engine.add_human_message(summary_think)
@@ -1099,6 +1124,9 @@ class DeepResearchTool(BaseSearchTool):
                 if result_buffer:
                     yield result_buffer
             
+            # 本轮迭代结束：上报聚合进度事件
+            await self._progress("iteration_done", iteration_index=iteration)
+
             # 在每轮迭代结束后，评估是否需要继续搜索
             if iteration > 0 and self.all_retrieved_info:
                 # 异步判断是否需要继续生成查询
@@ -1127,7 +1155,10 @@ class DeepResearchTool(BaseSearchTool):
         # 使用检索到的信息生成答案
         retrieved_content = "\n\n".join(self.all_retrieved_info)
         final_answer = await self._async_generate_final_answer(query, retrieved_content, think)
-        
+
+        # 上报最终答案事件
+        await self._progress("answer", iteration_index=iteration, answer_char_count=len(final_answer))
+
         # 向用户发送最终答案（一次性发送，因为前端会替换整个响应）
         yield {"answer": final_answer, "thinking": think}
     

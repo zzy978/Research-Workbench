@@ -15,7 +15,7 @@ from graphrag_agent.evolution import SkillSpec
 
 
 class ApiFakeDriver:
-    def __init__(self, context):
+    def __init__(self, context, events=None):
         self.context = context
         self.executed = bool(context.workflow_state.get("executed"))
         self.results = [

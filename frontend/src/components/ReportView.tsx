@@ -1,5 +1,6 @@
 import DOMPurify from "dompurify";
 import ReactMarkdown from "react-markdown";
+import { VERIFICATION_LABELS } from "./stageMeta";
 import { Evidence, Report } from "../types/api";
 
 export function ReportView({ report, evidence, onEvidence }: {report?: Report | null; evidence: Evidence[]; onEvidence: (item: Evidence) => void}) {
@@ -15,7 +16,7 @@ export function ReportView({ report, evidence, onEvidence }: {report?: Report | 
       },
       p: ({children}) => <p>{rewriteCitations(children, evidence, onEvidence)}</p>,
     }}>{sanitized}</ReactMarkdown>
-    <div className="verification-row">{report.verification.map((check) => <span key={check.kind} className={check.passed ? "pass" : "fail"}>{check.passed ? "✓" : "!"} {check.kind}</span>)}</div>
+    <div className="verification-row">{report.verification.map((check) => <span key={check.kind} className={check.passed ? "pass" : "fail"}>{check.passed ? "✓" : "!"} {VERIFICATION_LABELS[check.kind] ?? check.kind}</span>)}</div>
   </article>;
 }
 

@@ -128,8 +128,11 @@ class PlanExecuteReportDriver:
 class DeepResearchDriver:
     """Keeps the existing DeepResearch loop as execute, with deterministic plan/report stages."""
 
-    def __init__(self, context: RunContext, agent: Any):
+    def __init__(self, context: RunContext, agent: Any, events: Any = None):
         self.context, self.agent = context, agent
+        self.events = events
+        self._iterations: dict[int, dict[str, Any]] = {}
+        self.thinking: str | None = None
         research_tool = getattr(agent, "research_tool", None)
         if getattr(research_tool, "deep_research", None) is not None:
             research_tool = research_tool.deep_research
@@ -157,18 +160,84 @@ class DeepResearchDriver:
 
     async def execute(self) -> None:
         if self.answer is None:
-            self.answer = await asyncio.to_thread(
-                self.agent.ask,
-                self.context.model_input or self.context.resolved_query or self.context.original_query,
-                self.context.session_id,
-                bypass_cache=self.context.source_mode.value == "web",
-            )
+            tool = getattr(self.agent, "research_tool", None)
+            if tool is not None and hasattr(tool, "thinking_stream"):
+                # 直接流式消费 research_tool.thinking_stream（与 LangGraph 研究节点同源），
+                # 逐轮迭代通过 progress_callback 实时发布 agent.progress / iteration.completed。
+                async def _on_progress(msg: dict) -> None:
+                    await self._on_tool_progress(msg)
+
+                inner = getattr(tool, "deep_research", None)
+                targets = [tool] + ([inner] if inner is not None else [])
+                for target in targets:
+                    target.progress_callback = _on_progress
+                try:
+                    async for chunk in tool.thinking_stream(
+                        self.context.model_input or self.context.resolved_query or self.context.original_query
+                    ):
+                        if isinstance(chunk, dict):
+                            if chunk.get("answer"):
+                                self.answer = chunk["answer"]
+                            self.thinking = chunk.get("thinking")
+                finally:
+                    for target in targets:
+                        target.progress_callback = None
+            else:
+                # 无流式接口（测试桩等）：回退到闭路 ask 路径
+                self.answer = await asyncio.to_thread(
+                    self.agent.ask,
+                    self.context.model_input or self.context.resolved_query or self.context.original_query,
+                    self.context.session_id,
+                    bypass_cache=self.context.source_mode.value == "web",
+                )
         tool = getattr(self.agent, "research_tool", None)
         provider_results = list(getattr(tool, "provider_results", []) or [])
         if not provider_results and getattr(tool, "deep_research", None) is not None:
             provider_results = list(getattr(tool.deep_research, "provider_results", []) or [])
         if provider_results:
             self.results = provider_results
+
+    async def _on_tool_progress(self, msg: dict) -> None:
+        """聚合工具迭代进度并发布 agent.progress / iteration.completed 事件"""
+        if self.events is None:
+            return
+        kind = msg.get("kind")
+        idx = int(msg.get("iteration_index", 0))
+        if kind == "iteration":
+            self._iterations.setdefault(idx, {"queries": [], "total_results": 0, "info_snippets": []})
+            await self.events.publish(self.context.run_id, "agent.progress", stage="executing",
+                                      payload={"iteration_index": idx, "kind": "iteration"})
+        elif kind == "search":
+            acc = self._iterations.setdefault(idx, {"queries": [], "total_results": 0, "info_snippets": []})
+            query = msg.get("query", "")
+            result_count = int(msg.get("result_count") or 0)
+            found_useful = bool(msg.get("found_useful"))
+            acc["queries"].append({"query": query, "result_count": result_count, "found_useful": found_useful})
+            acc["total_results"] += result_count
+            preview = msg.get("useful_info_preview")
+            if preview and len(acc["info_snippets"]) < 3:
+                acc["info_snippets"].append(str(preview)[:200])
+            await self.events.publish(self.context.run_id, "agent.progress", stage="executing",
+                                      payload={"iteration_index": idx, "kind": "search", "query": query,
+                                               "result_count": result_count, "found_useful": found_useful,
+                                               "useful_info_preview": msg.get("useful_info_preview")})
+        elif kind == "iteration_done":
+            acc = self._iterations.get(idx, {"queries": [], "total_results": 0, "info_snippets": []})
+            tool = getattr(self.agent, "research_tool", None)
+            if getattr(tool, "deep_research", None) is not None:
+                tool = tool.deep_research
+            max_iterations = getattr(tool, "max_iterations", None)
+            await self.events.publish(self.context.run_id, "iteration.completed", stage="executing",
+                                      payload={"iteration_index": idx, "kind": "iteration",
+                                               "queries": acc["queries"], "total_results": acc["total_results"],
+                                               "info_snippets": acc["info_snippets"],
+                                               "max_iterations": max_iterations,
+                                               "iterations_total": len(self._iterations)})
+        elif kind == "answer":
+            await self.events.publish(self.context.run_id, "iteration.completed", stage="executing",
+                                      payload={"iteration_index": idx, "kind": "answer",
+                                               "answer_char_count": msg.get("answer_char_count"),
+                                               "iterations_total": len(self._iterations)})
 
     async def report(self) -> str:
         body = self.answer or ""

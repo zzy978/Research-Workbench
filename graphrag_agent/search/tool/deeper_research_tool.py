@@ -105,6 +105,9 @@ class DeeperResearchTool:
                 
         # 添加执行日志容器
         self.execution_logs = []
+
+        # 迭代进度回调（由 DeepResearchDriver 注入）
+        self.progress_callback = None
         
         # 添加性能指标跟踪
         self.performance_metrics = {"total_time": 0}
@@ -1339,6 +1342,11 @@ class DeeperResearchTool:
             traceback.print_exc()
             yield error_msg
             
+    async def _progress(self, kind: str, **extra) -> None:
+        """向驱动回调上报迭代进度（回调由 DeepResearchDriver 注入）"""
+        if self.progress_callback is not None:
+            await self.progress_callback({"kind": kind, **extra})
+
     async def thinking_stream(self, query: str) -> AsyncGenerator[str, None]:
         """
         执行带流式输出的增强深度研究
@@ -1560,6 +1568,7 @@ class DeeperResearchTool:
             iter_msg = f"\n\n**正在进行第{iteration + 1}轮思考**...\n\n"
             yield iter_msg
             self._log(f"\n[深度研究] 开始第{iteration + 1}轮迭代\n")
+            await self._progress("iteration", iteration_index=iteration)
             
             # 跟踪迭代步骤
             iteration_step_id = self.evidence_tracker.add_reasoning_step(
@@ -1811,6 +1820,14 @@ class DeeperResearchTool:
                     self.deep_research.thinking_engine.add_reasoning_step(f"\n没有找到与'{search_query}'相关的信息。请尝试使用不同的关键词进行搜索。\n")
                     self.deep_research.thinking_engine.add_human_message(f"\n没有找到与'{search_query}'相关的信息。请尝试使用不同的关键词进行搜索。\n")
                     think += no_result_msg
+                    await self._progress(
+                        "search",
+                        iteration_index=iteration,
+                        query=search_query,
+                        result_count=0,
+                        found_useful=False,
+                        useful_info_preview=None,
+                    )
                     continue
                     
                 # 正常处理有结果的情况
@@ -1884,6 +1901,16 @@ class DeeperResearchTool:
                         "extraction_status"
                     )
                     
+                # 上报本轮搜索的进度事件
+                await self._progress(
+                    "search",
+                    iteration_index=iteration,
+                    query=search_query,
+                    result_count=sum(len(kbinfos.get(k, [])) for k in ("chunks", "entities", "relationships")),
+                    found_useful=has_useful_info,
+                    useful_info_preview=(useful_info[:100] + ("..." if len(useful_info) > 100 else "")) if has_useful_info else None,
+                )
+
                 # 更新推理历史
                 self.deep_research.thinking_engine.add_reasoning_step(summary_think)
                 self.deep_research.thinking_engine.add_human_message(summary_think)
@@ -1902,6 +1929,9 @@ class DeeperResearchTool:
                         
                 if result_buffer:
                     yield result_buffer
+
+            # 本轮迭代结束：上报聚合进度事件
+            await self._progress("iteration_done", iteration_index=iteration)
             
             # 在每轮迭代结束后，评估是否需要继续搜索
             if iteration > 0 and self.deep_research.all_retrieved_info:
@@ -2093,6 +2123,9 @@ class DeeperResearchTool:
         # 获取推理摘要
         reasoning_summary = self.evidence_tracker.summarize_reasoning(query_id)
         
+        # 上报最终答案事件
+        await self._progress("answer", iteration_index=iteration, answer_char_count=len(final_answer))
+
         # 在最终答案前增加子问题分析概述
         if initial_sub_queries and "<think>" in final_answer and "</think>" in final_answer:
             # 提取思考过程之外的部分
