@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from graphrag_agent.models.bailian_embeddings import (
+from deepresearch_agent.models.bailian_embeddings import (
     BailianOpenAIEmbeddings,
     is_bailian_compatible_url,
 )

@@ -13,14 +13,14 @@ from fastapi.responses import JSONResponse
 
 from backend.app.api.v1 import router as api_router
 from backend.app.services import ChatService, EventStreamService, RunService
-from graphrag_agent.config import settings
-from graphrag_agent.harness.errors import AppError, ErrorCode
-from graphrag_agent.persistence import Database
-from graphrag_agent.persistence.repositories import RunRepository, SessionRepository
-from graphrag_agent.memory import MemoryService
-from graphrag_agent.persistence.repositories import AuditRepository, MemoryRepository
-from graphrag_agent.persistence.repositories import SkillRepository
-from graphrag_agent.evolution import PromotionPolicy, SkillEvaluator
+from deepresearch_agent.config import settings
+from deepresearch_agent.harness.errors import AppError, ErrorCode
+from deepresearch_agent.persistence import Database
+from deepresearch_agent.persistence.repositories import RunRepository, SessionRepository
+from deepresearch_agent.memory import MemoryService
+from deepresearch_agent.persistence.repositories import AuditRepository, MemoryRepository
+from deepresearch_agent.persistence.repositories import SkillRepository
+from deepresearch_agent.evolution import PromotionPolicy, SkillEvaluator
 
 
 def _error(request: Request, *, status_code: int, code: str, message: str, retryable: bool = False, details=None):

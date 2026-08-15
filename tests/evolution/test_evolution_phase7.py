@@ -4,14 +4,14 @@ import pytest
 import pytest_asyncio
 
 from backend.app.schemas import MessageCreate, RunCreate, RunEventCreate, SessionCreate
-from graphrag_agent.evolution import (
+from deepresearch_agent.evolution import (
     PromotionPolicy, PromotionRejected, SkillEvaluator, SkillLinter, SkillLoader,
     SkillRegistry, SkillSpec, TrajectoryDistiller,
 )
-from graphrag_agent.harness import SourceMode, WorkflowMode
-from graphrag_agent.harness.contracts import ContractCheckData
-from graphrag_agent.persistence import Database
-from graphrag_agent.persistence.repositories import (
+from deepresearch_agent.harness import SourceMode, WorkflowMode
+from deepresearch_agent.harness.contracts import ContractCheckData
+from deepresearch_agent.persistence import Database
+from deepresearch_agent.persistence.repositories import (
     AuditRepository, ContractRepository, EventRepository, MessageRepository,
     RunRepository, SessionRepository, SkillRepository,
 )

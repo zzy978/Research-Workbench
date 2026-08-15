@@ -4,8 +4,8 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 
-from graphrag_agent.harness.event_bus import EventBus
-from graphrag_agent.persistence.repositories import EventRepository, RunRepository
+from deepresearch_agent.harness.event_bus import EventBus
+from deepresearch_agent.persistence.repositories import EventRepository, RunRepository
 
 
 TERMINAL_STATUSES = {"completed", "failed", "budget_exhausted", "cancelled"}

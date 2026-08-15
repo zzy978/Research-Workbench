@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import text
 
 from backend.app.dependencies import get_database
-from graphrag_agent.config import settings
+from deepresearch_agent.config import settings
 
 router = APIRouter(tags=["system"])
 

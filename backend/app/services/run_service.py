@@ -6,25 +6,25 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
-from graphrag_agent.agents.deep_research_agent import DeepResearchAgent
-from graphrag_agent.agents.multi_agent.integration.multi_agent_factory import MultiAgentFactory
-from graphrag_agent.config.settings import ARTIFACT_ROOT, AUTO_RESUME_RUNS
-from graphrag_agent.harness.contracts import SourceMode, WorkflowMode
-from graphrag_agent.harness.event_bus import EventBus
-from graphrag_agent.harness.recovery import RecoveryManager
-from graphrag_agent.harness.runtime import HarnessRuntime
-from graphrag_agent.harness.workflow import DeepResearchDriver, PlanExecuteReportDriver
-from graphrag_agent.persistence import ArtifactStore, Database
-from graphrag_agent.persistence.repositories import (
+from deepresearch_agent.agents.deep_research_agent import DeepResearchAgent
+from deepresearch_agent.agents.multi_agent.integration.multi_agent_factory import MultiAgentFactory
+from deepresearch_agent.config.settings import ARTIFACT_ROOT, AUTO_RESUME_RUNS
+from deepresearch_agent.harness.contracts import SourceMode, WorkflowMode
+from deepresearch_agent.harness.event_bus import EventBus
+from deepresearch_agent.harness.recovery import RecoveryManager
+from deepresearch_agent.harness.runtime import HarnessRuntime
+from deepresearch_agent.harness.workflow import DeepResearchDriver, PlanExecuteReportDriver
+from deepresearch_agent.persistence import ArtifactStore, Database
+from deepresearch_agent.persistence.repositories import (
     ArtifactRepository, CheckpointRepository, ContractRepository, EventRepository,
     EvidenceRepository, MessageRepository, PlanTaskToolRepository, RunRepository,
     SessionRepository, MemoryRepository, AuditRepository,
     SkillRepository,
 )
-from graphrag_agent.memory import ContextBuilder, EpisodicMemory, MemoryExtractor, MemoryRetriever, MemoryService, SessionSummarizer
-from graphrag_agent.config import settings
-from graphrag_agent.evolution import SkillLoader, SkillRegistry, TrajectoryDistiller
-from graphrag_agent.retrieval.router import create_default_router
+from deepresearch_agent.memory import ContextBuilder, EpisodicMemory, MemoryExtractor, MemoryRetriever, MemoryService, SessionSummarizer
+from deepresearch_agent.config import settings
+from deepresearch_agent.evolution import SkillLoader, SkillRegistry, TrajectoryDistiller
+from deepresearch_agent.retrieval.router import create_default_router
 
 
 class RunService:

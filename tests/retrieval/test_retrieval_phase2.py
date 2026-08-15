@@ -4,20 +4,20 @@ from pathlib import Path
 
 import pytest
 
-from graphrag_agent.agents.multi_agent.core.plan_spec import PlanExecutionSignal, TaskNode
-from graphrag_agent.agents.multi_agent.core.retrieval_result import RetrievalMetadata, RetrievalResult
-from graphrag_agent.agents.multi_agent.core.state import PlanExecuteState
-from graphrag_agent.agents.multi_agent.executor.retrieval_executor import RetrievalExecutor
-from graphrag_agent.harness.contracts import SourceMode
-from graphrag_agent.harness.errors import AppError, ErrorCode
-from graphrag_agent.harness.policies import SourcePolicy
-from graphrag_agent.retrieval.base import SearchFilters, ToolCallContext
-from graphrag_agent.retrieval.graphrag_provider import GraphRAGProvider
-from graphrag_agent.retrieval.router import RetrievalRouter
-from graphrag_agent.retrieval.tavily_provider import TavilyProvider
-from graphrag_agent.search.tool.deep_research_tool import DeepResearchTool
-from graphrag_agent.agents.multi_agent.planner.task_decomposer import TaskDecomposer
-from graphrag_agent.agents.multi_agent.reporter.formatter import CitationFormatter
+from deepresearch_agent.agents.multi_agent.core.plan_spec import PlanExecutionSignal, TaskNode
+from deepresearch_agent.agents.multi_agent.core.retrieval_result import RetrievalMetadata, RetrievalResult
+from deepresearch_agent.agents.multi_agent.core.state import PlanExecuteState
+from deepresearch_agent.agents.multi_agent.executor.retrieval_executor import RetrievalExecutor
+from deepresearch_agent.harness.contracts import SourceMode
+from deepresearch_agent.harness.errors import AppError, ErrorCode
+from deepresearch_agent.harness.policies import SourcePolicy
+from deepresearch_agent.retrieval.base import SearchFilters, ToolCallContext
+from deepresearch_agent.retrieval.graphrag_provider import GraphRAGProvider
+from deepresearch_agent.retrieval.router import RetrievalRouter
+from deepresearch_agent.retrieval.tavily_provider import TavilyProvider
+from deepresearch_agent.search.tool.deep_research_tool import DeepResearchTool
+from deepresearch_agent.agents.multi_agent.planner.task_decomposer import TaskDecomposer
+from deepresearch_agent.agents.multi_agent.reporter.formatter import CitationFormatter
 
 
 class FakeProvider:
@@ -251,10 +251,10 @@ def test_web_deep_research_disables_vector_cache_initialization(monkeypatch):
         raise AssertionError("Web DeepResearch 不应初始化向量缓存 embedding")
 
     monkeypatch.setattr(
-        "graphrag_agent.cache_manager.manager.get_cache_embedding_provider",
+        "deepresearch_agent.cache_manager.manager.get_cache_embedding_provider",
         fail_if_initialized,
     )
-    from graphrag_agent.agents.deep_research_agent import DeepResearchAgent
+    from deepresearch_agent.agents.deep_research_agent import DeepResearchAgent
 
     agent = DeepResearchAgent(
         use_deeper_tool=True,

@@ -1,9 +1,9 @@
 """Transactional chat command service."""
 
 from backend.app.schemas import MessageCreate, MessageSend, RunAccepted, RunCreate
-from graphrag_agent.config.settings import HARNESS_BUDGETS
-from graphrag_agent.harness.errors import AppError, ErrorCode
-from graphrag_agent.persistence.repositories import RunRepository, SessionRepository
+from deepresearch_agent.config.settings import HARNESS_BUDGETS
+from deepresearch_agent.harness.errors import AppError, ErrorCode
+from deepresearch_agent.persistence.repositories import RunRepository, SessionRepository
 
 
 class ChatService:

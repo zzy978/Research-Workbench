@@ -89,7 +89,20 @@ docker compose up -d neo4j
 ### 5. 初始化数据库并启动后端
 
 ```bash
-python -m alembic upgrade head
+python -m alembic upgrade head   # src 定位已由 alembic.ini 的 prepend_sys_path 处理
+```
+
+后端采用 `src/` 布局（核心包位于 `src/deepresearch_agent/`），启动前需将 `src` 加入 `PYTHONPATH`：
+
+```powershell
+# Windows PowerShell
+$env:PYTHONPATH = "$PWD\src"
+python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --workers 1
+```
+
+```bash
+# Linux / macOS
+export PYTHONPATH="$PWD/src"
 python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --workers 1
 ```
 
@@ -147,21 +160,22 @@ cd frontend && npm run build       # 前端类型检查 + 生产构建
 │       ├── pages/ChatPage.tsx    # 聊天主界面（会话侧栏、消息流、报告、看板）
 │       ├── components/           # ReportView、SessionSidebar、StageCard、CanvasBoard 等
 │       └── hooks/                # useRunEvents（SSE）、useStagePositions
-├── graphrag_agent/               # 核心引擎包
-│   ├── harness/                  # Runtime、Workflow、bootstrap、recovery、checkpoints、event_bus、policies、evidence、verifiers
-│   ├── agents/                   # DeepResearch / Fusion / multi_agent（planner、executor、reporter、integration）
-│   ├── search/                   # 检索工具集：local/global/hybrid/naive、deep_research_tool、tool_registry
-│   ├── retrieval/                # base、tavily_provider、graphrag_provider、router（统一 Provider）
-│   ├── memory/                   # episodic、semantic、session_summary、context_builder、service
-│   ├── evolution/                # SkillLoader、SkillRegistry、TrajectoryDistiller、Evaluator、Linter、Promotion
-│   ├── persistence/              # SQLite、ArtifactStore、repositories、Alembic 迁移
-│   ├── graph/                    # 知识图谱构建：extraction、indexing、processing、structure、community
-│   ├── pipelines/ingestion/      # 文档摄入（text_chunker、document_processor、file_reader）
-│   ├── integrations/build/       # 图谱索引构建（build_graph、build_chunk_index、增量更新）
-│   ├── models/                   # LLM / Embedding 配置与封装
-│   ├── config/                   # settings.py（全部环境变量）、prompts
-│   ├── community/                # 社区检测（leiden / sllpa）
-│   └── cache_manager/            # 模型与结果缓存
+├── src/                          # src 布局：核心引擎包（包名 deepresearch_agent，PYTHONPATH 需包含 src）
+│   └── deepresearch_agent/       # 核心引擎包
+│       ├── harness/              # Runtime、Workflow、bootstrap、recovery、checkpoints、event_bus、policies、evidence、verifiers
+│       ├── agents/               # DeepResearch / Fusion / multi_agent（planner、executor、reporter、integration）
+│       ├── search/               # 检索工具集：local/global/hybrid/naive、deep_research_tool、tool_registry
+│       ├── retrieval/            # base、tavily_provider、graphrag_provider、router（统一 Provider）
+│       ├── memory/               # episodic、semantic、session_summary、context_builder、service
+│       ├── evolution/            # SkillLoader、SkillRegistry、TrajectoryDistiller、Evaluator、Linter、Promotion
+│       ├── persistence/          # SQLite、ArtifactStore、repositories、Alembic 迁移
+│       ├── graph/                # 知识图谱构建：extraction、indexing、processing、structure、community
+│       ├── pipelines/ingestion/  # 文档摄入（text_chunker、document_processor、file_reader）
+│       ├── integrations/build/   # 图谱索引构建（build_graph、build_chunk_index、增量更新）
+│       ├── models/               # LLM / Embedding 配置与封装
+│       ├── config/               # settings.py（全部环境变量）、prompts
+│       ├── community/            # 社区检测（leiden / sllpa）
+│       └── cache_manager/        # 模型与结果缓存
 ├── tests/                        # 分阶段测试：acceptance / api / harness / memory / evolution / persistence / retrieval / models / smoke
 ├── scripts/                      # start-local.ps1、stop-local.ps1、backup/restore、e2e-poll-check.ps1
 ├── skills/                       # Skill 定义目录（SKILLS_ROOT）

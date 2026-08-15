@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from graphrag_agent.harness.contracts import SourceMode, WorkflowMode
+from deepresearch_agent.harness.contracts import SourceMode, WorkflowMode
 
 
 class ApiModel(BaseModel):

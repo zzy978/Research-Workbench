@@ -7,11 +7,11 @@ from fastapi.testclient import TestClient
 
 from backend.app.main import create_app
 from backend.app.schemas import MessageCreate, RunCreate, SessionCreate
-from graphrag_agent.agents.multi_agent.core.execution_record import ExecutionMetadata, ExecutionRecord, ToolCall
-from graphrag_agent.agents.multi_agent.core.retrieval_result import RetrievalMetadata, RetrievalResult
-from graphrag_agent.harness import SourceMode, WorkflowMode
-from graphrag_agent.persistence.repositories import RunRepository, SessionRepository
-from graphrag_agent.evolution import SkillSpec
+from deepresearch_agent.agents.multi_agent.core.execution_record import ExecutionMetadata, ExecutionRecord, ToolCall
+from deepresearch_agent.agents.multi_agent.core.retrieval_result import RetrievalMetadata, RetrievalResult
+from deepresearch_agent.harness import SourceMode, WorkflowMode
+from deepresearch_agent.persistence.repositories import RunRepository, SessionRepository
+from deepresearch_agent.evolution import SkillSpec
 
 
 class ApiFakeDriver:
@@ -158,7 +158,7 @@ def test_clarification_resumes_same_run(client):
 
 
 def test_capabilities_and_openapi_are_complete(client, monkeypatch):
-    from graphrag_agent.config import settings
+    from deepresearch_agent.config import settings
     monkeypatch.setattr(settings, "TAVILY_API_KEY", "")
     capabilities = client.get("/api/v1/capabilities").json()
     assert capabilities["sources"]["web"] == {"available": False, "reason": "TAVILY_API_KEY 未配置"}

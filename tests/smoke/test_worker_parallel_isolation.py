@@ -1,10 +1,10 @@
 import threading
 
-from graphrag_agent.agents.multi_agent.core.execution_record import ExecutionMetadata, ExecutionRecord
-from graphrag_agent.agents.multi_agent.core.plan_spec import AcceptanceCriteria, PlanSpec, ProblemStatement, TaskGraph, TaskNode
-from graphrag_agent.agents.multi_agent.core.state import PlanExecuteState
-from graphrag_agent.agents.multi_agent.executor.base_executor import BaseExecutor, TaskExecutionResult
-from graphrag_agent.agents.multi_agent.executor.worker_coordinator import WorkerCoordinator
+from deepresearch_agent.agents.multi_agent.core.execution_record import ExecutionMetadata, ExecutionRecord
+from deepresearch_agent.agents.multi_agent.core.plan_spec import AcceptanceCriteria, PlanSpec, ProblemStatement, TaskGraph, TaskNode
+from deepresearch_agent.agents.multi_agent.core.state import PlanExecuteState
+from deepresearch_agent.agents.multi_agent.executor.base_executor import BaseExecutor, TaskExecutionResult
+from deepresearch_agent.agents.multi_agent.executor.worker_coordinator import WorkerCoordinator
 
 
 class IsolatedExecutor(BaseExecutor):

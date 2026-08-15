@@ -1,14 +1,21 @@
 import argparse
 import asyncio
+import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
-from graphrag_agent.agents.deep_research_agent import DeepResearchAgent
-from graphrag_agent.agents.fusion_agent import FusionGraphRAGAgent
-from graphrag_agent.harness.contracts import SourceMode
-from graphrag_agent.harness.contracts import WorkflowMode
-from graphrag_agent.harness.bootstrap import run_persistent_query
-from graphrag_agent.retrieval.router import create_default_router
+# src 布局：脚本从项目根目录直接运行时，将 src 加入 sys.path 以定位 deepresearch_agent 包
+_SRC = Path(__file__).resolve().parent / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+from deepresearch_agent.agents.deep_research_agent import DeepResearchAgent
+from deepresearch_agent.agents.fusion_agent import FusionGraphRAGAgent
+from deepresearch_agent.harness.contracts import SourceMode
+from deepresearch_agent.harness.contracts import WorkflowMode
+from deepresearch_agent.harness.bootstrap import run_persistent_query
+from deepresearch_agent.retrieval.router import create_default_router
 
 
 AGENT_NAMES = ("deep_research", "fusion")

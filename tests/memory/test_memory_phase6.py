@@ -4,16 +4,16 @@ import pytest
 import pytest_asyncio
 
 from backend.app.schemas import MessageCreate, RunCreate, SessionCreate
-from graphrag_agent.harness import SourceMode, WorkflowMode
-from graphrag_agent.harness.checkpoints import CheckpointManager
-from graphrag_agent.harness.contracts import ContractCheckData
-from graphrag_agent.harness.run_context import RunContext
-from graphrag_agent.memory import (
+from deepresearch_agent.harness import SourceMode, WorkflowMode
+from deepresearch_agent.harness.checkpoints import CheckpointManager
+from deepresearch_agent.harness.contracts import ContractCheckData
+from deepresearch_agent.harness.run_context import RunContext
+from deepresearch_agent.memory import (
     ContextBuilder, EpisodicMemory, MemoryExtractor, MemoryPolicy, MemoryRejected,
     MemoryRetriever, MemoryService, QueryResolver, SessionSummarizer,
 )
-from graphrag_agent.persistence import Database
-from graphrag_agent.persistence.repositories import (
+from deepresearch_agent.persistence import Database
+from deepresearch_agent.persistence.repositories import (
     AuditRepository, CheckpointRepository, ContractRepository, MemoryRepository,
     MessageRepository, RunRepository, SessionRepository,
 )

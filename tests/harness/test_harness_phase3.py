@@ -4,18 +4,18 @@ import pytest
 import pytest_asyncio
 
 from backend.app.schemas import MessageCreate, RunCreate, SessionCreate
-from graphrag_agent.agents.multi_agent.core.execution_record import ExecutionMetadata, ExecutionRecord, ToolCall
-from graphrag_agent.agents.multi_agent.core.retrieval_result import RetrievalMetadata, RetrievalResult
-from graphrag_agent.harness import RunStatus, SourceMode, WorkflowMode
-from graphrag_agent.harness.budgets import BudgetExceeded, BudgetLimits, BudgetManager
-from graphrag_agent.harness.checkpoints import CheckpointManager
-from graphrag_agent.harness.contracts import ContractEvaluator
-from graphrag_agent.harness.run_context import RunContext
-from graphrag_agent.harness.runtime import HarnessRuntime
-from graphrag_agent.harness.errors import AppError, ErrorCode
-from graphrag_agent.harness.state_machine import InvalidTransition, StateMachine
-from graphrag_agent.persistence import ArtifactStore, Database
-from graphrag_agent.persistence.repositories import (
+from deepresearch_agent.agents.multi_agent.core.execution_record import ExecutionMetadata, ExecutionRecord, ToolCall
+from deepresearch_agent.agents.multi_agent.core.retrieval_result import RetrievalMetadata, RetrievalResult
+from deepresearch_agent.harness import RunStatus, SourceMode, WorkflowMode
+from deepresearch_agent.harness.budgets import BudgetExceeded, BudgetLimits, BudgetManager
+from deepresearch_agent.harness.checkpoints import CheckpointManager
+from deepresearch_agent.harness.contracts import ContractEvaluator
+from deepresearch_agent.harness.run_context import RunContext
+from deepresearch_agent.harness.runtime import HarnessRuntime
+from deepresearch_agent.harness.errors import AppError, ErrorCode
+from deepresearch_agent.harness.state_machine import InvalidTransition, StateMachine
+from deepresearch_agent.persistence import ArtifactStore, Database
+from deepresearch_agent.persistence.repositories import (
     ArtifactRepository, CheckpointRepository, ContractRepository, EventRepository,
     EvidenceRepository, MessageRepository, PlanTaskToolRepository, RunRepository,
     SessionRepository,
@@ -146,7 +146,7 @@ def test_budget_manager_enforces_tool_retry_and_replan_limits():
 
 @pytest.mark.asyncio
 async def test_web_deep_research_bypasses_answer_cache_and_replan_reexecutes():
-    from graphrag_agent.harness.workflow import DeepResearchDriver
+    from deepresearch_agent.harness.workflow import DeepResearchDriver
 
     class Agent:
         def __init__(self):
@@ -177,8 +177,8 @@ def test_real_deep_research_agent_ask_accepts_and_forwards_bypass_cache(monkeypa
     早期回归只用自定义假 Agent（自带 bypass_cache 签名），漏掉了真实
     DeepResearchAgent 重写 ask() 时未转发参数导致的 TypeError。
     """
-    from graphrag_agent.agents.base import BaseAgent
-    from graphrag_agent.agents.deep_research_agent import DeepResearchAgent
+    from deepresearch_agent.agents.base import BaseAgent
+    from deepresearch_agent.agents.deep_research_agent import DeepResearchAgent
 
     # 仅构造最小实例，避免 __init__ 初始化 DeepResearchTool 的外部依赖
     agent = DeepResearchAgent.__new__(DeepResearchAgent)

@@ -4,7 +4,7 @@ from typing import Any, Dict, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from graphrag_agent.harness.contracts import RunStatus, SourceMode, WorkflowMode
+from deepresearch_agent.harness.contracts import RunStatus, SourceMode, WorkflowMode
 
 
 class PersistenceDTO(BaseModel):

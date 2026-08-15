@@ -7,12 +7,12 @@ from sqlalchemy import select
 
 from backend.app.dependencies import get_database, get_memory_service, get_skill_services
 from backend.app.schemas import MemoryLifecycleUpdate
-from graphrag_agent.harness.errors import AppError, ErrorCode
-from graphrag_agent.persistence.models import EvalRunModel, MemoryModel, SkillCandidateModel, SkillVersionModel
-from graphrag_agent.memory import MemoryRejected
-from graphrag_agent.persistence.repositories import MemoryRepository
-from graphrag_agent.evolution import PromotionRejected
-from graphrag_agent.persistence.repositories import AuditRepository
+from deepresearch_agent.harness.errors import AppError, ErrorCode
+from deepresearch_agent.persistence.models import EvalRunModel, MemoryModel, SkillCandidateModel, SkillVersionModel
+from deepresearch_agent.memory import MemoryRejected
+from deepresearch_agent.persistence.repositories import MemoryRepository
+from deepresearch_agent.evolution import PromotionRejected
+from deepresearch_agent.persistence.repositories import AuditRepository
 
 router = APIRouter(tags=["learning"])
 

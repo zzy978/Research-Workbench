@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, Query, Response, status
 
 from backend.app.dependencies import get_chat_service, get_database
 from backend.app.schemas import MessageSend, SessionCreate, SessionPatch
-from graphrag_agent.harness.errors import AppError, ErrorCode
-from graphrag_agent.persistence.repositories import MessageRepository, RunRepository, SessionRepository
+from deepresearch_agent.harness.errors import AppError, ErrorCode
+from deepresearch_agent.persistence.repositories import MessageRepository, RunRepository, SessionRepository
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 

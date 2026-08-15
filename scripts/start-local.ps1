@@ -3,6 +3,8 @@ param([switch]$SkipNeo4j)
 $ErrorActionPreference = "Stop"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location -LiteralPath $ProjectRoot
+# src 布局：后端进程需要从 src 目录定位 deepresearch_agent 包
+$env:PYTHONPATH = Join-Path $ProjectRoot "src"
 
 if (-not (Test-Path -LiteralPath ".env")) { throw "Missing .env. Copy .env.example and configure backend keys first." }
 if (-not $SkipNeo4j) { docker compose up -d neo4j }
