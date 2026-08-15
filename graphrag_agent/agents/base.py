@@ -1,6 +1,6 @@
 from typing import Annotated, Sequence, TypedDict, List, Dict, Any, AsyncGenerator, Optional
 from abc import ABC, abstractmethod
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph, START
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
@@ -214,8 +214,17 @@ class BaseAgent(ABC):
                 messages = messages[:-1] + [enhanced_message]
         
         # 使用工具处理请求
+        # 强制先检索后回答：DeepResearch 的完成契约要求证据支撑，
+        # 若模型自行决定不调用检索工具，将产生无证据答案并在 verify 阶段空转。
         model = self.llm.bind_tools(self.tools)
-        response = model.invoke(messages)
+        system = SystemMessage(
+            content=(
+                "你是深度研究助手。回答用户问题前，你必须先调用检索工具（如 deep_research / "
+                "tavily_search）获取真实证据；未调用任何检索工具时不得直接作答。"
+                "检索结果不足时应继续迭代检索，不要仅凭模型自身知识或编造内容作答。"
+            )
+        )
+        response = model.invoke([system, *messages])
         
         self._log_execution("agent", messages, response)
         return {"messages": [response]}

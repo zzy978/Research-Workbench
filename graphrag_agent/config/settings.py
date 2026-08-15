@@ -77,7 +77,11 @@ APP_HOST = os.getenv("APP_HOST", "127.0.0.1")
 APP_PORT = _require_positive("APP_PORT", _get_env_int("APP_PORT", 8000) or 8000)
 FRONTEND_ORIGINS = tuple(
     item.strip()
-    for item in os.getenv("FRONTEND_ORIGINS", "http://localhost:5173").split(",")
+    # 默认同时放行 localhost 与 127.0.0.1：仓库内 vite.config.ts 将 dev server
+    # 绑定在 http://127.0.0.1:5173，仅放行 localhost 会导致浏览器 CORS 预检被拒。
+    for item in os.getenv(
+        "FRONTEND_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+    ).split(",")
     if item.strip()
 )
 APP_DATABASE_URL = os.getenv(
