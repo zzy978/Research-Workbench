@@ -132,6 +132,21 @@ async def test_tavily_200_maps_normalizes_deduplicates_and_hides_key(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_tavily_redacts_external_token_shaped_content_and_sensitive_url_params(tmp_path: Path):
+    class Client:
+        def search(self, **kwargs):
+            return {"results": [{"title": "secret sample", "url": "https://example.com/a?api_key=TAVILY_TEST_PLACEHOLDER&utm_source=x", "content": "Example TAVILY_TEST_PLACEHOLDER and Bearer abcdefghijklmnop", "score": 0.8}]}
+
+    provider = TavilyProvider(api_key="backend-only", client=Client(), cache_dir=tmp_path)
+    results = await provider.search("query", top_k=1, search_depth="basic", filters=SearchFilters(), call_context=_context(SourceMode.WEB))
+    serialized = json.dumps([item.to_dict() for item in results], ensure_ascii=False, default=str)
+    cache_text = "".join(path.read_text(encoding="utf-8") for path in tmp_path.glob("*.json"))
+    assert "tvly-body" not in serialized + cache_text
+    assert "Bearer abc" not in serialized + cache_text
+    assert results[0].metadata.url == "https://example.com/a"
+
+
+@pytest.mark.asyncio
 async def test_tavily_auth_fails_without_retry(tmp_path: Path):
     class Unauthorized(Exception):
         status_code = 401

@@ -13,15 +13,30 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "HERMES_INSPIRED_LOCAL_MVP_DEVELOPMENT_EXECUTION_PLAN.md",
+                "file": "progress.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "HERMES_INSPIRED_LOCAL_MVP_DEVELOPMENT_EXECUTION_PLAN"
+              "title": "progress"
+            }
+          },
+          {
+            "id": "6369b417cd8f8e56",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "docs/acceptance/results.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "results"
             }
           }
-        ]
+        ],
+        "currentTab": 1
       }
     ],
     "direction": "vertical"
@@ -161,7 +176,7 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "HERMES_INSPIRED_LOCAL_MVP_DEVELOPMENT_EXECUTION_PLAN.md",
+                "file": "docs/acceptance/results.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
@@ -188,19 +203,28 @@
       "bases:新建数据库": false
     }
   },
-  "active": "63aabdae66e646d9",
+  "active": "6369b417cd8f8e56",
   "lastOpenFiles": [
+    "docs/acceptance/acceptance-matrix.md",
+    "docs/acceptance/scenario-template.md",
+    "docs/acceptance/results.md",
+    "progress.md",
+    "HERMES_INSPIRED_LOCAL_MVP_DESIGN.md",
+    "graphrag_agent/evolution/__pycache__/linter.cpython-310.pyc.1699907673808",
+    "graphrag_agent/retrieval/__pycache__/web_utils.cpython-310.pyc.1891579383280",
+    "graphrag_agent/retrieval/__pycache__/tavily_provider.cpython-310.pyc.1891578739008",
+    "tests/retrieval/__pycache__/test_retrieval_phase2.cpython-310-pytest-8.4.2.pyc.18060",
+    "scripts/__pycache__/scan_secrets.cpython-310.pyc",
+    "scripts/scan_secrets.py",
+    "data/acceptance/phase8-real/artifacts/run_b98de7526993467d9e190e95bed7976c/report/final.md",
+    "data/acceptance/phase8-real/artifacts/run_b98de7526993467d9e190e95bed7976c/report",
+    "data/acceptance/phase8-real/artifacts/run_b98de7526993467d9e190e95bed7976c",
+    "data/acceptance/phase8-real/app.db-shm",
+    "data/acceptance/phase8-real/app.db-wal",
+    "README.md",
+    "HERMES_AGENT_DESIGN_IMPROVEMENT_PROPOSAL.md",
+    "HERMES_INSPIRED_LOCAL_MVP_DEVELOPMENT_EXECUTION_PLAN.md",
     "data/artifacts/run_4cc8d3dc518948708a18826eaca7aba1/report/final.md",
-    "data/artifacts/run_4cc8d3dc518948708a18826eaca7aba1/report",
-    "cache/enhanced_research_agent/global/fc/fc5d549c3acb107b30c5568697d859bc.json",
-    "cache/enhanced_research_agent/78/786d9455ce0f2ea84f85a57145c2cee1.json",
-    "cache/enhanced_research_agent/78",
-    "cache/enhanced_research_agent/5f",
-    "cache/enhanced_research_agent/global/fc",
-    "data/artifacts/run_4cc8d3dc518948708a18826eaca7aba1/tavily/call_6c17c3bb9c554b7dbf2cb674cbd5b023.json",
-    "cache/tavily/c526e6b25167b8af083178e8156cc941582066e10dd76842cedf7432d2f0d0b8.json",
-    "data/artifacts/run_4cc8d3dc518948708a18826eaca7aba1/tavily/call_4e8ec146d6aa43688e4adb142dacc048.json",
-    "cache/tavily/be39fe993f6e87bf5d40d3c316cfaf73b74c6741877c5eb4cb83b195e2ec6c6e.json",
     "data/acceptance/phase45-real/artifacts/run_d5c94f1fd65f47ce85c1de8394894ecb/report/final.md",
     "data/acceptance/phase45-real/artifacts/run_39d07933e75d43ea9c2f73ba9d4c0bb3/report/final.md",
     "data/artifacts/run_3f229a98171546c8a92559cffbe0e2d9/report/final.md",
@@ -208,7 +232,6 @@
     "frontend/node_modules/is-alphanumerical/readme.md",
     "frontend/node_modules/decode-named-character-reference/readme.md",
     "frontend/node_modules/@types/mdast/README.md",
-    "progress.md",
     "evals/baseline/results.md",
     "frontend/node_modules/@esbuild/win32-x64/README.md",
     "frontend/node_modules/@remix-run/router/README.md",
@@ -216,15 +239,6 @@
     "frontend/node_modules/@remix-run/router/CHANGELOG.md",
     "frontend/node_modules/react-dom/README.md",
     "frontend/node_modules/vite/README.md",
-    "frontend/node_modules/vite/LICENSE.md",
-    "frontend/node_modules/@babel/template/README.md",
-    "frontend/node_modules/typescript/SECURITY.md",
-    "frontend/node_modules/typescript/README.md",
-    "frontend/node_modules/react-router-dom/README.md",
-    "frontend/node_modules/react-router-dom/LICENSE.md",
-    "frontend/node_modules/react-router-dom/CHANGELOG.md",
-    "frontend/node_modules/@types/prop-types/README.md",
-    "frontend/node_modules/rollup/README.md",
-    "frontend/node_modules/rollup/LICENSE.md"
+    "frontend/node_modules/vite/LICENSE.md"
   ]
 }

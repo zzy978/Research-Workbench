@@ -58,9 +58,9 @@ class RunControl(ApiModel):
 class MemoryLifecycleUpdate(ApiModel):
     content: str | None = Field(default=None, min_length=1, max_length=10000)
     status: Literal["candidate", "active", "rejected", "expired"] | None = None
+    expires_at: str | None = Field(default=None, max_length=40)
 
 
 class SkillActionResponse(ApiModel):
     accepted: bool
     reason: str
-

@@ -84,7 +84,12 @@ APP_DATABASE_URL = os.getenv(
     "APP_DATABASE_URL", "sqlite+aiosqlite:///./data/app.db"
 ).strip()
 ARTIFACT_ROOT = Path(os.getenv("ARTIFACT_ROOT", PROJECT_ROOT / "data" / "artifacts")).expanduser()
+SKILLS_ROOT = Path(os.getenv("SKILLS_ROOT", PROJECT_ROOT / "skills")).expanduser()
 AUTO_RESUME_RUNS = _get_env_bool("AUTO_RESUME_RUNS", True)
+CONTEXT_MAX_CHARS = _require_positive("CONTEXT_MAX_CHARS", _get_env_int("CONTEXT_MAX_CHARS", 16000) or 16000)
+CONTEXT_RECENT_TURNS = _require_positive("CONTEXT_RECENT_TURNS", _get_env_int("CONTEXT_RECENT_TURNS", 8) or 8)
+SESSION_SUMMARY_THRESHOLD_MESSAGES = _require_positive("SESSION_SUMMARY_THRESHOLD_MESSAGES", _get_env_int("SESSION_SUMMARY_THRESHOLD_MESSAGES", 20) or 20)
+SEMANTIC_MEMORY_MAX_CHARS = _require_positive("SEMANTIC_MEMORY_MAX_CHARS", _get_env_int("SEMANTIC_MEMORY_MAX_CHARS", 6000) or 6000)
 
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 TAVILY_SEARCH_DEPTH = _get_env_choice("TAVILY_SEARCH_DEPTH", {"basic", "advanced"}, "advanced")

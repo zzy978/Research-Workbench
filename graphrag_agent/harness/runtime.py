@@ -43,6 +43,9 @@ class HarnessRuntime:
         artifact_store: ArtifactStore | None = None,
         artifact_repository: ArtifactRepository | None = None,
         event_bus: EventBus | None = None,
+        context_builder: Any | None = None,
+        memory_extractor: Any | None = None,
+        skill_distiller: Any | None = None,
         lease_seconds: int = 90,
     ):
         self.runs = run_repository
@@ -56,6 +59,9 @@ class HarnessRuntime:
         self.artifact_store = artifact_store
         self.artifact_repository = artifact_repository
         self.workflow_factory = workflow_factory
+        self.context_builder = context_builder
+        self.memory_extractor = memory_extractor
+        self.skill_distiller = skill_distiller
         self.state_machine = StateMachine()
         self.lease_seconds = lease_seconds
 
@@ -68,24 +74,37 @@ class HarnessRuntime:
             context = await self._load_context(run_id)
             if context.status is RunStatus.INTERRUPTED:
                 await self._transition(context, RunStatus.QUEUED, event_type="run.resumed")
+            if context.status in {RunStatus.QUEUED, RunStatus.CONTEXT_BUILDING}:
+                if context.status is RunStatus.QUEUED:
+                    await self._transition(context, RunStatus.CONTEXT_BUILDING, event_type="run.started")
+                if self.context_builder is not None:
+                    context = await self.context_builder.build(context)
+                    selected_skill = context.context_snapshot.get("selected_skill") or {}
+                    await self.runs.update_model_snapshot(run_id, {
+                        **context.model_snapshot,
+                        "skill": None if not selected_skill else {"name": selected_skill.get("name"), "version": selected_skill.get("version")},
+                        "context_policy": {
+                            "recent_turns": len(context.context_snapshot.get("recent_messages", [])),
+                            "semantic_memory_ids": [item.get("memory_id") for item in context.context_snapshot.get("semantic_memories", [])],
+                        },
+                    })
+                else:
+                    context.resolved_query = context.resolved_query or context.original_query
             driver = self.workflow_factory(context)
             if inspect.isawaitable(driver):
                 driver = await driver
+            if context.status is RunStatus.CONTEXT_BUILDING:
+                context.workflow_state = driver.snapshot()
+                await self.checkpoints.save(context, "context_building")
+                await self.events.publish(run_id, "context.completed", stage="context_building", payload={"query_resolved": True, "used_message_ids": context.used_message_ids, "semantic_memory_count": len(context.context_snapshot.get("semantic_memories", []))})
+                await self._transition(context, RunStatus.PLANNING)
             budget = BudgetManager(context.budget_limits, context.budget_usage)
 
             while not self.state_machine.is_terminal(context.status):
                 await self._assert_not_cancelled(context)
                 budget.assert_available()
 
-                if context.status is RunStatus.QUEUED:
-                    await self._transition(context, RunStatus.CONTEXT_BUILDING, event_type="run.started")
-                    context.resolved_query = context.resolved_query or context.original_query
-                    context.workflow_state = driver.snapshot()
-                    await self.checkpoints.save(context, "context_building")
-                    await self.events.publish(run_id, "context.completed", stage="context_building", payload={"query_resolved": True})
-                    await self._transition(context, RunStatus.PLANNING)
-
-                elif context.status in {RunStatus.PLANNING, RunStatus.REPLANNING}:
+                if context.status in {RunStatus.PLANNING, RunStatus.REPLANNING}:
                     failures = list(context.workflow_state.get("verification_failures", []))
                     await driver.plan(failures or None)
                     context.plan_version += 1
@@ -145,6 +164,20 @@ class HarnessRuntime:
                         await self.runs.complete_verified(run_id, assistant_content=context.report or "", usage=budget.snapshot())
                         await self.checkpoints.save(context, "completed")
                         await self.events.publish(run_id, "run.completed", stage="completed", payload={"verified": True})
+                        if self.memory_extractor is not None:
+                            try:
+                                candidates = await self.memory_extractor.extract_from_completed_run(run_id)
+                                for candidate in candidates:
+                                    await self.events.publish(run_id, "memory.candidate_created", stage="completed", payload={"memory_id": candidate.memory_id})
+                            except Exception as exc:
+                                await self.events.publish(run_id, "memory.extraction_failed", stage="completed", payload={"error": type(exc).__name__})
+                        if self.skill_distiller is not None:
+                            try:
+                                candidate = await self.skill_distiller.distill(run_id)
+                                if candidate is not None:
+                                    await self.events.publish(run_id, "skill.candidate_created", stage="completed", payload={"candidate_id": candidate.candidate_id, "name": candidate.name, "version": candidate.proposed_version})
+                            except Exception as exc:
+                                await self.events.publish(run_id, "skill.distillation_failed", stage="completed", payload={"error": type(exc).__name__})
                         break
 
                     decision = classify_verification_failures(verdict.failures)

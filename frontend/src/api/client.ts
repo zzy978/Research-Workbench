@@ -31,4 +31,7 @@ export const api = {
   patchMemory: (id: string, payload: Record<string, unknown>) => request(`/memories/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteMemory: (id: string) => request<void>(`/memories/${id}`, { method: "DELETE" }),
   skills: () => request<{versions: Array<Record<string, unknown>>; candidates: Array<Record<string, unknown>>}>("/skills"),
+  evaluateSkill: (name: string, version: string) => request<Record<string, unknown>>(`/skills/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}/evaluate`, {method: "POST"}),
+  promoteSkill: (name: string, version: string) => request<Record<string, unknown>>(`/skills/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}/promote`, {method: "POST"}),
+  rollbackSkill: (name: string) => request<Record<string, unknown>>(`/skills/${encodeURIComponent(name)}/rollback`, {method: "POST"}),
 };

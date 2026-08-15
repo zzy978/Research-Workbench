@@ -38,7 +38,7 @@ class PlanExecuteReportDriver:
             session_id=context.session_id, run_id=context.run_id,
             source_mode=context.source_mode.value, workflow_mode=context.workflow_mode.value,
             budget_state={"limits": context.budget_limits.model_dump(), "usage": context.budget_usage.model_dump()},
-            context_snapshot=context.config_snapshot, input=context.resolved_query or context.original_query,
+            context_snapshot=context.context_snapshot or context.config_snapshot, input=context.model_input or context.resolved_query or context.original_query,
         )
         self.planner_result: PlannerResult | None = None
         self.report_result: ReportResult | None = None
@@ -159,7 +159,7 @@ class DeepResearchDriver:
         if self.answer is None:
             self.answer = await asyncio.to_thread(
                 self.agent.ask,
-                self.context.resolved_query or self.context.original_query,
+                self.context.model_input or self.context.resolved_query or self.context.original_query,
                 self.context.session_id,
                 bypass_cache=self.context.source_mode.value == "web",
             )

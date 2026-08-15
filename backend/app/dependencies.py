@@ -18,3 +18,10 @@ def get_chat_service(request: Request):
 def get_event_stream(request: Request):
     return request.app.state.event_stream
 
+
+def get_memory_service(request: Request):
+    return request.app.state.memory_service
+
+
+def get_skill_services(request: Request):
+    return request.app.state.skill_services

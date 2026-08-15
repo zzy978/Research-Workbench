@@ -87,6 +87,11 @@ class SessionRepository:
                 return []
             return list((await session.execute(select(SessionModel).where(SessionModel.session_id.in_(ids), SessionModel.deleted_at.is_(None)))).scalars())
 
+    async def update_summary(self, session_id: str, summary: dict[str, Any]) -> bool:
+        async with self.database.transaction() as session:
+            result = await session.execute(update(SessionModel).where(SessionModel.session_id == session_id, SessionModel.deleted_at.is_(None)).values(summary_json=json_text(summary), updated_at=utc_now_iso()))
+            return result.rowcount == 1
+
 
 class MessageRepository:
     def __init__(self, database: Database):
@@ -222,6 +227,11 @@ class RunRepository:
             session.add(message)
             await session.flush()
             return message, True
+
+    async def update_model_snapshot(self, run_id: str, snapshot: dict[str, Any]) -> bool:
+        async with self.database.transaction() as session:
+            result = await session.execute(update(RunModel).where(RunModel.run_id == run_id).values(model_snapshot_json=json_text(snapshot), updated_at=utc_now_iso()))
+            return result.rowcount == 1
 
     async def list_recoverable(self) -> list[RunModel]:
         async with self.database.sessions() as session:

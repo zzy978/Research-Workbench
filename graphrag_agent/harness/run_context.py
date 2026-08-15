@@ -26,6 +26,8 @@ class RunContext(BaseModel):
     budget_limits: BudgetLimits = Field(default_factory=BudgetLimits)
     budget_usage: BudgetUsage = Field(default_factory=BudgetUsage)
     cancellation_requested: bool = False
+    context_snapshot: Dict[str, Any] = Field(default_factory=dict)
+    used_message_ids: list[str] = Field(default_factory=list)
+    model_input: Optional[str] = None
     workflow_state: Dict[str, Any] = Field(default_factory=dict)
     report: Optional[str] = None
-

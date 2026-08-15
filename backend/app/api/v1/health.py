@@ -1,4 +1,7 @@
-"""Health and capability discovery."""
+"""Health and capability discovery without spending model/search quota."""
+
+import asyncio
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import text
@@ -9,26 +12,44 @@ from graphrag_agent.config import settings
 router = APIRouter(tags=["system"])
 
 
+async def _tcp_status(uri: str, default_port: int) -> tuple[str, str | None]:
+    parsed = urlparse(uri)
+    host, port = parsed.hostname, parsed.port or default_port
+    if not host:
+        return "unavailable", "地址未配置"
+    try:
+        _reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=0.75)
+        writer.close()
+        await writer.wait_closed()
+        return "healthy", None
+    except Exception:
+        return "degraded", f"无法连接 {host}:{port}"
+
+
 @router.get("/health")
 async def health(database=Depends(get_database)):
     sqlite_status = "healthy"
     try:
         async with database.engine.connect() as connection:
-            await connection.execute(text("SELECT 1"))
+            await connection.execute(text("CREATE TEMP TABLE IF NOT EXISTS health_probe(value INTEGER)"))
+            await connection.execute(text("DROP TABLE health_probe"))
     except Exception:
         sqlite_status = "unavailable"
     llm_configured = bool(settings.OPENAI_API_KEY and settings.OPENAI_LLM_MODEL)
     neo4j_configured = bool(settings.NEO4J_URI and settings.NEO4J_USERNAME and settings.NEO4J_PASSWORD)
     tavily_configured = bool(settings.TAVILY_API_KEY)
-    overall = "healthy" if sqlite_status == "healthy" and llm_configured and (neo4j_configured or tavily_configured) else "degraded"
+    llm_status, llm_reason = await _tcp_status(settings.OPENAI_BASE_URL, 443) if llm_configured else ("unavailable", "LLM 未配置")
+    neo4j_status, neo4j_reason = await _tcp_status(settings.NEO4J_URI, 7687) if neo4j_configured else ("unavailable", "Neo4j 未配置")
+    tavily_status, tavily_reason = (("healthy", None) if tavily_configured else ("unavailable", "TAVILY_API_KEY 未配置"))
+    overall = "healthy" if sqlite_status == "healthy" and llm_status == "healthy" and (neo4j_status == "healthy" or tavily_status == "healthy") else "degraded"
     return {
         "status": overall,
         "components": {
             "api": {"status": "healthy"},
             "sqlite": {"status": sqlite_status},
-            "llm": {"status": "healthy" if llm_configured else "unavailable", "configured": llm_configured},
-            "neo4j": {"status": "healthy" if neo4j_configured else "unavailable", "configured": neo4j_configured},
-            "tavily": {"status": "healthy" if tavily_configured else "unavailable", "configured": tavily_configured},
+            "llm": {"status": llm_status, "configured": llm_configured, "reason": llm_reason},
+            "neo4j": {"status": neo4j_status, "configured": neo4j_configured, "reason": neo4j_reason},
+            "tavily": {"status": tavily_status, "configured": tavily_configured, "reason": tavily_reason, "checked": "configuration_only"},
         },
     }
 
@@ -36,10 +57,12 @@ async def health(database=Depends(get_database)):
 @router.get("/capabilities")
 async def capabilities():
     web = bool(settings.TAVILY_API_KEY)
-    graph = bool(settings.NEO4J_URI and settings.NEO4J_USERNAME and settings.NEO4J_PASSWORD)
+    graph_configured = bool(settings.NEO4J_URI and settings.NEO4J_USERNAME and settings.NEO4J_PASSWORD)
+    graph_status, graph_reason = await _tcp_status(settings.NEO4J_URI, 7687) if graph_configured else ("unavailable", "Neo4j 未配置")
+    graph = graph_status == "healthy"
     return {
         "sources": {
-            "graphrag": {"available": graph, "reason": None if graph else "Neo4j 未配置"},
+            "graphrag": {"available": graph, "reason": None if graph else graph_reason},
             "web": {"available": web, "reason": None if web else "TAVILY_API_KEY 未配置"},
         },
         "workflows": ["deep_research", "plan_execute_report"],

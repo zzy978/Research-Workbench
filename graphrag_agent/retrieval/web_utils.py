@@ -8,6 +8,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
 _TRACKING_KEYS = {"fbclid", "gclid", "mc_cid", "mc_eid", "ref", "ref_src"}
+_SENSITIVE_KEYS = {"api_key", "apikey", "key", "token", "access_token", "auth", "authorization", "signature"}
 
 
 def normalize_url(url: str) -> str:
@@ -25,7 +26,7 @@ def normalize_url(url: str) -> str:
         sorted(
             (key, val)
             for key, val in parse_qsl(parts.query, keep_blank_values=True)
-            if not key.lower().startswith("utm_") and key.lower() not in _TRACKING_KEYS
+            if not key.lower().startswith("utm_") and key.lower() not in _TRACKING_KEYS and key.lower() not in _SENSITIVE_KEYS
         ),
         doseq=True,
     )

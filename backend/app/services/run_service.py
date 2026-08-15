@@ -18,7 +18,12 @@ from graphrag_agent.persistence import ArtifactStore, Database
 from graphrag_agent.persistence.repositories import (
     ArtifactRepository, CheckpointRepository, ContractRepository, EventRepository,
     EvidenceRepository, MessageRepository, PlanTaskToolRepository, RunRepository,
+    SessionRepository, MemoryRepository, AuditRepository,
+    SkillRepository,
 )
+from graphrag_agent.memory import ContextBuilder, EpisodicMemory, MemoryExtractor, MemoryRetriever, MemoryService, SessionSummarizer
+from graphrag_agent.config import settings
+from graphrag_agent.evolution import SkillLoader, SkillRegistry, TrajectoryDistiller
 from graphrag_agent.retrieval.router import create_default_router
 
 
@@ -29,6 +34,7 @@ class RunService:
         *,
         workflow_factory: Callable[[Any], Any] | None = None,
         artifact_root=ARTIFACT_ROOT,
+        skills_root=settings.SKILLS_ROOT,
     ):
         self.database = database
         self.runs = RunRepository(database)
@@ -39,6 +45,18 @@ class RunService:
         self._external_factory = workflow_factory
         self._router = None if workflow_factory else create_default_router()
         self._tasks: dict[str, asyncio.Task] = {}
+        memory_repository = MemoryRepository(database)
+        memory_service = MemoryService(memory_repository, AuditRepository(database))
+        self.skill_registry = SkillRegistry(skills_root, SkillRepository(database))
+        skill_loader = SkillLoader(self.skill_registry)
+        self.context_builder = ContextBuilder(
+            self.messages, EpisodicMemory(self.messages, self.runs),
+            MemoryRetriever(memory_repository, max_chars=settings.SEMANTIC_MEMORY_MAX_CHARS),
+            SessionSummarizer(SessionRepository(database), self.messages, threshold_messages=settings.SESSION_SUMMARY_THRESHOLD_MESSAGES),
+            skill_loader=skill_loader, max_chars=settings.CONTEXT_MAX_CHARS, recent_turns=settings.CONTEXT_RECENT_TURNS,
+        )
+        self.memory_extractor = MemoryExtractor(memory_service, self.runs, self.messages, ContractRepository(database))
+        self.skill_distiller = TrajectoryDistiller(database, self.skill_registry, self.runs, self.messages, ContractRepository(database))
 
     def schedule(self, run_id: str) -> asyncio.Task:
         existing = self._tasks.get(run_id)
@@ -70,6 +88,7 @@ class RunService:
             trajectory_repository=PlanTaskToolRepository(self.database), workflow_factory=workflow_factory,
             artifact_store=self.artifact_store, artifact_repository=ArtifactRepository(self.database),
             event_bus=self.event_bus,
+            context_builder=self.context_builder, memory_extractor=self.memory_extractor, skill_distiller=self.skill_distiller,
         )
         try:
             return await runtime.execute_run(run_id)
@@ -104,4 +123,3 @@ class RunService:
         for task in active:
             task.cancel()
         await asyncio.gather(*active, return_exceptions=True)
-

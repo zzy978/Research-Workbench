@@ -17,6 +17,10 @@ from graphrag_agent.config import settings
 from graphrag_agent.harness.errors import AppError, ErrorCode
 from graphrag_agent.persistence import Database
 from graphrag_agent.persistence.repositories import RunRepository, SessionRepository
+from graphrag_agent.memory import MemoryService
+from graphrag_agent.persistence.repositories import AuditRepository, MemoryRepository
+from graphrag_agent.persistence.repositories import SkillRepository
+from graphrag_agent.evolution import PromotionPolicy, SkillEvaluator
 
 
 def _error(request: Request, *, status_code: int, code: str, message: str, retryable: bool = False, details=None):
@@ -28,12 +32,13 @@ def _error(request: Request, *, status_code: int, code: str, message: str, retry
 
 def create_app(
     *, database_url: str | None = None, workflow_factory=None,
-    artifact_root: str | Path | None = None, auto_resume: bool | None = None,
+    artifact_root: str | Path | None = None, skills_root: str | Path | None = None,
+    auto_resume: bool | None = None,
 ) -> FastAPI:
     if not settings.LOCAL_MVP_SINGLE_WORKER:
         raise RuntimeError("本地 MVP 必须设置 FASTAPI_WORKERS=1")
     database = Database(database_url or settings.APP_DATABASE_URL)
-    run_service = RunService(database, workflow_factory=workflow_factory, artifact_root=artifact_root or settings.ARTIFACT_ROOT)
+    run_service = RunService(database, workflow_factory=workflow_factory, artifact_root=artifact_root or settings.ARTIFACT_ROOT, skills_root=skills_root or settings.SKILLS_ROOT)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -48,6 +53,14 @@ def create_app(
     app.state.run_service = run_service
     app.state.chat_service = ChatService(SessionRepository(database), RunRepository(database), run_service)
     app.state.event_stream = EventStreamService(run_service.events, run_service.runs, run_service.event_bus)
+    app.state.memory_service = MemoryService(MemoryRepository(database), AuditRepository(database))
+    skill_repository = SkillRepository(database)
+    app.state.skill_services = {
+        "repository": skill_repository,
+        "registry": run_service.skill_registry,
+        "evaluator": SkillEvaluator(skill_repository),
+        "promotion": PromotionPolicy(skill_repository, run_service.skill_registry, AuditRepository(database)),
+    }
     app.add_middleware(CORSMiddleware, allow_origins=list(settings.FRONTEND_ORIGINS), allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 
     @app.middleware("http")
@@ -79,4 +92,3 @@ def create_app(
 
 
 app = create_app()
-

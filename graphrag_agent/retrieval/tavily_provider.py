@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import random
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,7 @@ from graphrag_agent.retrieval.web_utils import content_hash, domain_from_url, no
 class TavilyProvider:
     mode = SourceMode.WEB
     provider_name = "tavily"
+    _secret_pattern = re.compile(r"(?<![A-Za-z0-9_])(?:sk|tvly)-[A-Za-z0-9_-]{8,}|\bBearer\s+[A-Za-z0-9._-]{8,}|\bapi[_ -]?key\s*[:=]\s*\S+", re.I)
 
     def __init__(
         self,
@@ -74,10 +76,10 @@ class TavilyProvider:
         })
         cached = self._read_cache(args)
         if cached is None:
-            raw = await self._search_with_retry(args)
+            raw = self._sanitize_external(await self._search_with_retry(args))
             self._write_cache(args, raw)
         else:
-            raw = cached
+            raw = self._sanitize_external(cached)
         artifact = self._store_raw(call_context, raw)
         return self._map_results(raw, artifact=artifact)[: int(args["top_k"])]
 
@@ -212,6 +214,25 @@ class TavilyProvider:
         temporary = path.with_suffix(f".{time.time_ns()}.tmp")
         temporary.write_text(json.dumps(raw, ensure_ascii=False, default=str), encoding="utf-8")
         temporary.replace(path)
+
+    @classmethod
+    def _sanitize_external(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return cls._secret_pattern.sub("[REDACTED]", value)
+        if isinstance(value, list):
+            return [cls._sanitize_external(item) for item in value]
+        if isinstance(value, dict):
+            sanitized = {}
+            for key, item in value.items():
+                if key.lower() == "url" and isinstance(item, str):
+                    try:
+                        sanitized[key] = normalize_url(item)
+                    except ValueError:
+                        sanitized[key] = ""
+                else:
+                    sanitized[key] = cls._sanitize_external(item)
+            return sanitized
+        return value
 
     @staticmethod
     def _parse_datetime(value: Any) -> Optional[datetime]:

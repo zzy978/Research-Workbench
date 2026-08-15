@@ -11,6 +11,7 @@ from graphrag_agent.agents.multi_agent.core.execution_record import ExecutionMet
 from graphrag_agent.agents.multi_agent.core.retrieval_result import RetrievalMetadata, RetrievalResult
 from graphrag_agent.harness import SourceMode, WorkflowMode
 from graphrag_agent.persistence.repositories import RunRepository, SessionRepository
+from graphrag_agent.evolution import SkillSpec
 
 
 class ApiFakeDriver:
@@ -64,7 +65,7 @@ class ApiFakeDriver:
 def client(tmp_path):
     app = create_app(
         database_url=f"sqlite+aiosqlite:///{(tmp_path / 'api.db').as_posix()}",
-        artifact_root=tmp_path / "artifacts", workflow_factory=ApiFakeDriver, auto_resume=False,
+        artifact_root=tmp_path / "artifacts", skills_root=tmp_path / "skills", workflow_factory=ApiFakeDriver, auto_resume=False,
     )
     with TestClient(app) as test_client:
         yield test_client
@@ -164,3 +165,56 @@ def test_capabilities_and_openapi_are_complete(client, monkeypatch):
     paths = client.get("/openapi.json").json()["paths"]
     required = {"/api/v1/sessions", "/api/v1/runs/{run_id}/events", "/api/v1/memories", "/api/v1/skills"}
     assert required.issubset(paths)
+
+
+def test_ten_turn_session_survives_app_restart(tmp_path):
+    database_path = (tmp_path / "ten-turn.db").as_posix()
+    artifact_root = tmp_path / "ten-turn-artifacts"
+    app = create_app(database_url=f"sqlite+aiosqlite:///{database_path}", artifact_root=artifact_root, skills_root=tmp_path / "ten-turn-skills", workflow_factory=ApiFakeDriver, auto_resume=False)
+    with TestClient(app) as first:
+        session_id = new_session(first)
+        run_ids = []
+        for turn in range(10):
+            response = first.post(f"/api/v1/sessions/{session_id}/messages", json={
+                "client_message_id": f"turn-{turn}", "content": "那恢复机制呢？" if turn else "请研究 SQLite 会话恢复机制",
+                "source_mode": "graphrag", "workflow_mode": "deep_research",
+            })
+            run_id = response.json()["run_id"]
+            assert wait_terminal(first, run_id)["status"] == "completed"
+            run_ids.append(run_id)
+        detail = first.get(f"/api/v1/sessions/{session_id}").json()
+        assert len(detail["messages"]) == 20
+        assert len({item["run_id"] for item in detail["messages"] if item["role"] == "assistant"}) == 10
+        assert all(item["status"] == "completed" for item in detail["runs"])
+
+    reopened_app = create_app(database_url=f"sqlite+aiosqlite:///{database_path}", artifact_root=artifact_root, skills_root=tmp_path / "ten-turn-skills", workflow_factory=ApiFakeDriver, auto_resume=False)
+    with TestClient(reopened_app) as reopened:
+        detail = reopened.get(f"/api/v1/sessions/{session_id}").json()
+        assert len(detail["messages"]) == 20
+        assert {item["run_id"] for item in detail["runs"]} == set(run_ids)
+
+
+def test_skill_api_evaluate_promote_and_rollback(client):
+    run_id = send(client, new_session(client)).json()["run_id"]
+    assert wait_terminal(client, run_id)["status"] == "completed"
+
+    async def register(version):
+        return await client.app.state.run_service.skill_registry.register_candidate(
+            run_id=run_id,
+            spec=SkillSpec(
+                name="api-research-skill", description="通过 API 评测和人工启用的同源研究流程。", version=version,
+                source_modes=["graphrag"], created_from_runs=[run_id], triggers=["研究报告"], inputs=["问题"],
+                steps=["规划", "检索", "报告", "验证"], allowed_tools=["local_search"],
+                fallback="证据不足时继续同源检索。", verification=["citation_integrity"],
+            ),
+            eval_cases=[{"name": "positive"}, {"name": "boundary"}],
+        )
+
+    for version in ("0.1.0", "0.1.1"):
+        client.portal.call(register, version)
+        evaluated = client.post(f"/api/v1/skills/api-research-skill/versions/{version}/evaluate")
+        assert evaluated.status_code == 200 and evaluated.json()["status"] == "passed"
+        promoted = client.post(f"/api/v1/skills/api-research-skill/versions/{version}/promote")
+        assert promoted.status_code == 200 and promoted.json()["status"] == "active"
+    rolled_back = client.post("/api/v1/skills/api-research-skill/rollback")
+    assert rolled_back.status_code == 200 and rolled_back.json()["version"] == "0.1.0"
