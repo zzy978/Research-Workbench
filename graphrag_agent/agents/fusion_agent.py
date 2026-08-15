@@ -5,6 +5,8 @@ from typing import Any, AsyncGenerator, Dict, Optional, Tuple
 from graphrag_agent.config.settings import AGENT_SETTINGS
 
 from graphrag_agent.agents.multi_agent.integration.legacy_facade import MultiAgentFacade
+from graphrag_agent.harness.contracts import SourceMode
+from graphrag_agent.retrieval.base import RetrievalProvider
 
 
 class _MemoryShim:
@@ -24,9 +26,16 @@ class _GraphShim:
 class FusionGraphRAGAgent:
     """Fusion GraphRAG Agent 的轻量封装版本，完全委托给多智能体编排栈。"""
 
-    def __init__(self, cache_dir: str = "./cache/fusion_graphrag") -> None:
+    def __init__(
+        self,
+        cache_dir: str = "./cache/fusion_graphrag",
+        *,
+        retrieval_provider: Optional[RetrievalProvider] = None,
+        source_mode: SourceMode | str = SourceMode.GRAPHRAG,
+    ) -> None:
         self.cache_dir = cache_dir
-        self.multi_agent = MultiAgentFacade()
+        self.source_mode = SourceMode(source_mode)
+        self.multi_agent = MultiAgentFacade(retrieval_provider=retrieval_provider)
         self.memory = _MemoryShim()
         self.graph = _GraphShim()
         self.execution_log: list[Any] = []
@@ -58,7 +67,9 @@ class FusionGraphRAGAgent:
         cached = self._read_cache(query, thread_id)
         if cached is not None:
             return cached, {"status": "cached"}
-        payload = self.multi_agent.process_query(query.strip(), assumptions=assumptions, report_type=report_type)
+        payload = self.multi_agent.process_query(
+            query.strip(), assumptions=assumptions, report_type=report_type, source_mode=self.source_mode
+        )
         answer = self._normalize_answer(payload.get("response"))
         self._write_cache(query, thread_id, answer)
         self.execution_log = payload.get("execution_records", [])

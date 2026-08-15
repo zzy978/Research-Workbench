@@ -22,6 +22,7 @@ Edit `.env` with your Neo4j and LLM settings before running graph build or searc
 ```bash
 python search_without_stream.py "你的问题" --agent fusion
 python search_without_stream.py "你的问题" --agent deep_research
+python search_without_stream.py "你的问题" --agent fusion --source-mode web
 ```
 
 ## Build Knowledge Graph
@@ -49,13 +50,16 @@ The extracted package keeps only the runtime modules needed by the two agents an
 
 Generated cache files stay under `cache/`; raw input documents stay under `files/`.
 
-## Local MVP development baseline (phases 0–1)
+## Local MVP development baseline (phases 0–2)
 
-The repository now includes the phase 0 engineering baseline and phase 1 durable fact store described in `HERMES_INSPIRED_LOCAL_MVP_DEVELOPMENT_EXECUTION_PLAN.md`:
+The repository now includes the phase 0 engineering baseline, phase 1 durable fact store, and phase 2 unified retrieval layer described in `HERMES_INSPIRED_LOCAL_MVP_DEVELOPMENT_EXECUTION_PLAN.md`:
 
 - Python 3.11 is the target runtime (the code remains compatible with Python 3.10); Node.js 20 LTS and Neo4j 5.22 are the target local services.
 - The existing DeepResearch and Plan–Execute–Report entry points remain intact. Parallel PER workers execute against isolated state snapshots and the coordinator merges results deterministically.
 - SQLite stores Sessions, Messages, Runs, Events, Checkpoints, plans/tasks/tool calls, Evidence, Contract checks, Memory/Skill records and audit events. Large artifacts remain under `data/artifacts/`.
+- `RetrievalRouter` freezes each run to exactly one provider. GraphRAG reuses the existing local/global/hybrid/naive tools; Tavily maps Web results into the same `RetrievalResult` and Evidence provenance used by PER and DeepResearch.
+- DeepResearch retains its iterative query/gap-resolution loop and PER retains Planner/TaskGraph/Worker/Reporter. Both receive their source through provider injection; a failed provider is never replaced by the other source.
+- Web search requires `TAVILY_API_KEY` in the backend environment. Without it, GraphRAG still works and requesting `--source-mode web` returns an explicit unavailable/configuration error.
 - The local MVP backend must run with one FastAPI worker. Set `FASTAPI_WORKERS=1` in `.env` before later API stages are started.
 
 Install the updated dependencies and create/update the database:
@@ -65,10 +69,10 @@ python -m pip install -r requirements.txt
 alembic upgrade head
 ```
 
-Run the phase 0/1 tests:
+Run the phase 0–2 tests:
 
 ```powershell
-python -m pytest tests/persistence tests/smoke
+python -m pytest tests/persistence tests/smoke tests/retrieval
 ```
 
 The migration applies SQLite WAL, foreign keys and FTS5 indexes through the configured connection. Runtime data, artifacts, frontend dependencies/build output and real environment files are ignored by Git. Do not put credentials in `.env.example`; the checked-in file contains empty placeholders only.

@@ -1,4 +1,5 @@
 from typing import Dict, List, Any, Optional, AsyncGenerator
+import uuid
 import time
 import re
 import logging
@@ -9,9 +10,6 @@ from langchain_core.messages import SystemMessage, HumanMessage
 import asyncio
 
 from graphrag_agent.search.tool.base import BaseSearchTool
-from graphrag_agent.search.tool.hybrid_tool import HybridSearchTool
-from graphrag_agent.search.tool.local_search_tool import LocalSearchTool
-from graphrag_agent.search.tool.global_search_tool import GlobalSearchTool
 from graphrag_agent.config.prompts import BEGIN_SEARCH_QUERY, BEGIN_SEARCH_RESULT, END_SEARCH_RESULT, MAX_SEARCH_LIMIT, \
     END_SEARCH_QUERY, RELEVANT_EXTRACTION_PROMPT, SUB_QUERY_PROMPT, FOLLOWUP_QUERY_PROMPT, FINAL_ANSWER_PROMPT
 from graphrag_agent.search.tool.reasoning.nlp import extract_between
@@ -20,6 +18,8 @@ from graphrag_agent.search.tool.reasoning.thinking import ThinkingEngine
 from graphrag_agent.search.tool.reasoning.validator import AnswerValidator
 from graphrag_agent.search.tool.reasoning.search import DualPathSearcher, QueryGenerator
 from graphrag_agent.config.settings import KB_NAME
+from graphrag_agent.harness.contracts import SourceMode
+from graphrag_agent.retrieval.base import RetrievalProvider, SearchFilters, ToolCallContext, run_async_from_sync
 
 
 class DeepResearchTool(BaseSearchTool):
@@ -34,17 +34,31 @@ class DeepResearchTool(BaseSearchTool):
     5. 迭代上述过程直到获得完整答案
     """
     
-    def __init__(self):
+    def __init__(self, provider: Optional[RetrievalProvider] = None, *, run_id: Optional[str] = None):
         """初始化深度研究工具"""
-        super().__init__(cache_dir="./cache/deep_research")
+        super().__init__(
+            cache_dir="./cache/deep_research",
+            enable_graph=not (provider is not None and provider.mode == SourceMode.WEB),
+        )
+        self.retrieval_provider = provider
+        self.run_id = run_id or f"legacy_{uuid.uuid4().hex}"
+        self.provider_results = []
 
         # 关键词缓存
         self._keywords_cache = {}
         
-        # 初始化各种工具，用于不同阶段的搜索
-        self.hybrid_tool = HybridSearchTool()  # 用于关键词提取和混合搜索
-        self.global_tool = GlobalSearchTool()  # 用于社区检索
-        self.local_tool = LocalSearchTool()    # 用于本地搜索
+        # Web Run 不实例化任何 GraphRAG 工具，避免私有源连接和隐式降级。
+        if provider is not None and provider.mode == SourceMode.WEB:
+            self.hybrid_tool = None
+            self.global_tool = None
+            self.local_tool = None
+        else:
+            from graphrag_agent.search.tool.hybrid_tool import HybridSearchTool
+            from graphrag_agent.search.tool.local_search_tool import LocalSearchTool
+            from graphrag_agent.search.tool.global_search_tool import GlobalSearchTool
+            self.hybrid_tool = HybridSearchTool()  # 用于关键词提取和混合搜索
+            self.global_tool = GlobalSearchTool()  # 用于社区检索
+            self.local_tool = LocalSearchTool()    # 用于本地搜索
         
         # 初始化思考引擎
         self.thinking_engine = ThinkingEngine(self.llm)
@@ -88,7 +102,11 @@ class DeepResearchTool(BaseSearchTool):
         if query in self._keywords_cache:
             return self._keywords_cache[query]
 
-        keywords = self.hybrid_tool.extract_keywords(query)
+        if self.hybrid_tool is None:
+            tokens = [token for token in re.findall(r"[\w\u4e00-\u9fff]+", query) if len(token) > 1]
+            keywords = {"high_level": tokens[:3], "low_level": tokens[3:8] or tokens[:3]}
+        else:
+            keywords = self.hybrid_tool.extract_keywords(query)
         
         # 缓存结果
         self._keywords_cache[query] = keywords
@@ -394,11 +412,55 @@ class DeepResearchTool(BaseSearchTool):
 
     async def _async_search(self, query: str):
         """异步执行搜索，避免阻塞事件循环"""
+        if self.retrieval_provider is not None:
+            results = await self.retrieval_provider.search(
+                query,
+                top_k=5,
+                search_depth="advanced",
+                filters=SearchFilters(strategy="hybrid_search" if self.retrieval_provider.mode == SourceMode.GRAPHRAG else None),
+                call_context=ToolCallContext(
+                    run_id=self.run_id,
+                    source_mode=self.retrieval_provider.mode,
+                    tool_call_id=f"call_{uuid.uuid4().hex}",
+                ),
+            )
+            if any(result.source_mode != self.retrieval_provider.mode.value for result in results):
+                raise ValueError("Provider 返回了与 Run.source_mode 不一致的证据")
+            self.provider_results.extend(results)
+            return self._provider_results_to_legacy(results)
         def search_wrapper():
             return self.dual_searcher.search(query)
         
         # 在线程池中运行同步代码，避免阻塞事件循环
         return await asyncio.get_event_loop().run_in_executor(None, search_wrapper)
+
+    def _search_current_provider(self, query: str):
+        if self.retrieval_provider is None:
+            return self.dual_searcher.search(query)
+        return run_async_from_sync(lambda: self._async_search(query))
+
+    @staticmethod
+    def _provider_results_to_legacy(results):
+        chunks = []
+        doc_aggs = []
+        seen_docs = set()
+        for result in results:
+            metadata = result.metadata
+            source_id = metadata.source_id
+            chunks.append({
+                "chunk_id": result.result_id,
+                "doc_id": source_id,
+                "text": str(result.evidence),
+                "content_with_weight": str(result.evidence),
+                "url": metadata.url,
+                "title": metadata.title,
+                "score": result.score,
+                "source_mode": result.source_mode,
+            })
+            if source_id not in seen_docs:
+                doc_aggs.append({"doc_id": source_id, "title": metadata.title or source_id, "type": metadata.source_type})
+                seen_docs.add(source_id)
+        return {"chunks": chunks, "doc_aggs": doc_aggs, "entities": [], "relationships": []}
 
     async def _async_extract_info(self, search_query, prev_reasoning, kb_prompt_result):
         """异步提取信息，避免阻塞"""
@@ -568,7 +630,7 @@ class DeepResearchTool(BaseSearchTool):
                 think += f"\n\n> {iteration + 1}. {search_query}\n\n"
                 
                 # 执行实际搜索
-                kbinfos = self.dual_searcher.search(search_query)
+                kbinfos = self._search_current_provider(search_query)
                 
                 # 检查搜索结果是否为空
                 has_results = (
@@ -1213,9 +1275,9 @@ class DeepResearchTool(BaseSearchTool):
         super().close()
         
         # 关闭复用的工具资源
-        if hasattr(self, 'hybrid_tool'):
+        if getattr(self, 'hybrid_tool', None) is not None:
             self.hybrid_tool.close()
-        if hasattr(self, 'global_tool'):
+        if getattr(self, 'global_tool', None) is not None:
             self.global_tool.close()
-        if hasattr(self, 'local_tool'):
+        if getattr(self, 'local_tool', None) is not None:
             self.local_tool.close()

@@ -24,14 +24,19 @@ class CitationFormatter:
         retrieval_results: Iterable[RetrievalResult],
         citation_style: str = "default",
     ) -> str:
-        serialized = [
-            result.to_dict()
-            for result in retrieval_results
-        ]
+        results = list(retrieval_results)
+        serialized = [result.to_dict() for result in results]
         prompt = CITATION_FORMAT_PROMPT.format(
             retrieval_results=serialized,
             citation_style=citation_style,
         )
         message: BaseMessage = self._llm.invoke(prompt)  # type: ignore[assignment]
         content = getattr(message, "content", None) or str(message)
-        return content.strip()
+        provenance = []
+        for result in results:
+            label = "[Web]" if result.source_mode == "web" else "[私有库]"
+            location = result.metadata.url or result.metadata.source_id
+            title = result.metadata.title or result.metadata.source_type
+            provenance.append(f"- {label} [{result.result_id}] {title}: {location}")
+        provenance_block = "\n".join(provenance)
+        return f"{content.strip()}\n\n### 来源追踪\n{provenance_block}".strip()

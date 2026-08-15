@@ -29,6 +29,8 @@ from graphrag_agent.config.settings import (
     MULTI_AGENT_WORKER_EXECUTION_MODE,
     MULTI_AGENT_WORKER_MAX_CONCURRENCY,
 )
+from graphrag_agent.retrieval.base import RetrievalProvider
+from graphrag_agent.retrieval.router import RetrievalRouter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,10 +49,12 @@ class WorkerCoordinator:
         *,
         execution_mode: Optional[str] = None,
         max_parallel_workers: Optional[int] = None,
+        retrieval_provider: Optional[RetrievalProvider] = None,
+        retrieval_router: Optional[RetrievalRouter] = None,
     ) -> None:
         if executors is None:
             executors = [
-                RetrievalExecutor(),
+                RetrievalExecutor(provider=retrieval_provider, router=retrieval_router),
                 ResearchExecutor(),
                 ReflectionExecutor(),
             ]

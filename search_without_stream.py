@@ -4,16 +4,19 @@ from datetime import datetime
 
 from graphrag_agent.agents.deep_research_agent import DeepResearchAgent
 from graphrag_agent.agents.fusion_agent import FusionGraphRAGAgent
+from graphrag_agent.harness.contracts import SourceMode
+from graphrag_agent.retrieval.router import create_default_router
 
 
-AGENT_FACTORIES = {
-    "fusion": lambda: FusionGraphRAGAgent(),
-    "deep_research": lambda: DeepResearchAgent(use_deeper_tool=True),
-}
+AGENT_NAMES = ("deep_research", "fusion")
 
 
-def run_query(agent_name: str, query: str, thread_id: str) -> None:
-    agent = AGENT_FACTORIES[agent_name]()
+def run_query(agent_name: str, query: str, thread_id: str, source_mode: SourceMode) -> None:
+    provider = create_default_router().for_mode(source_mode)
+    if agent_name == "deep_research":
+        agent = DeepResearchAgent(use_deeper_tool=True, retrieval_provider=provider)
+    else:
+        agent = FusionGraphRAGAgent(retrieval_provider=provider, source_mode=source_mode)
     try:
         start_time = time.time()
         answer = agent.ask(query, thread_id=thread_id)
@@ -28,14 +31,15 @@ def run_query(agent_name: str, query: str, thread_id: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run an existing GraphRAG agent smoke query")
     parser.add_argument("query", nargs="?", default="急性脑⾎管病吃什么药？写一份研究报告")
-    parser.add_argument("--agent", choices=sorted(AGENT_FACTORIES), default="deep_research")
+    parser.add_argument("--agent", choices=AGENT_NAMES, default="deep_research")
+    parser.add_argument("--source-mode", choices=[mode.value for mode in SourceMode], default=SourceMode.GRAPHRAG.value)
     parser.add_argument("--thread-id", default=None)
     args = parser.parse_args()
     agent_name = args.agent
     query = args.query
     thread_id = args.thread_id or f"{agent_name}_{int(time.time())}"
     print(f"Started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    run_query(agent_name, query, thread_id)
+    run_query(agent_name, query, thread_id, SourceMode(args.source_mode))
 
 
 if __name__ == "__main__":

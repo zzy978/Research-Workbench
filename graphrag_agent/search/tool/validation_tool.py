@@ -1,9 +1,9 @@
 from typing import Any, Dict, List, Optional
+import re
 
 from langchain_core.tools import BaseTool
 
 from graphrag_agent.search.tool.reasoning.validator import AnswerValidator
-from graphrag_agent.search.tool.hybrid_tool import HybridSearchTool
 
 
 class AnswerValidationTool:
@@ -12,9 +12,16 @@ class AnswerValidationTool:
     默认复用HybridSearchTool的关键词提取能力以评估相关性。
     """
 
-    def __init__(self):
-        keyword_tool = HybridSearchTool()
-        self.validator = AnswerValidator(keyword_tool.extract_keywords)
+    def __init__(self, *, enable_graph: bool = True):
+        if enable_graph:
+            from graphrag_agent.search.tool.hybrid_tool import HybridSearchTool
+            keyword_tool = HybridSearchTool()
+            extractor = keyword_tool.extract_keywords
+        else:
+            def extractor(query: str) -> Dict[str, List[str]]:
+                tokens = [token for token in re.findall(r"[\w\u4e00-\u9fff]+", query) if len(token) > 1]
+                return {"high_level": tokens[:3], "low_level": tokens[3:8] or tokens[:3]}
+        self.validator = AnswerValidator(extractor)
 
     def validate(
         self,

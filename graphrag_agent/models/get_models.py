@@ -11,6 +11,10 @@ from graphrag_agent.config.settings import (
     OPENAI_EMBEDDING_CONFIG,
     OPENAI_LLM_CONFIG,
 )
+from graphrag_agent.models.bailian_embeddings import (
+    BailianOpenAIEmbeddings,
+    is_bailian_compatible_url,
+)
 
 
 # 设置 tiktoken 缓存目录，避免每次联网拉取
@@ -23,6 +27,8 @@ setup_cache()
 
 def get_embeddings_model():
     config = {k: v for k, v in OPENAI_EMBEDDING_CONFIG.items() if v}
+    if is_bailian_compatible_url(config.get("base_url")):
+        return BailianOpenAIEmbeddings(**config)
     return OpenAIEmbeddings(**config)
 
 

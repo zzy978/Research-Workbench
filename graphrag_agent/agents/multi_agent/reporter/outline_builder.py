@@ -11,10 +11,21 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 
 from graphrag_agent.config.prompts import OUTLINE_PROMPT
+from graphrag_agent.config.settings import (
+    LLM_MAX_TOKENS,
+    OPENAI_BASE_URL,
+    OPENAI_LLM_MODEL,
+)
+from graphrag_agent.models.bailian_embeddings import is_bailian_compatible_url
 from graphrag_agent.models.get_models import get_llm_model
 from graphrag_agent.agents.multi_agent.tools.json_parser import parse_json_text
 
 _LOGGER = logging.getLogger(__name__)
+_OUTLINE_RETRY_MAX_TOKENS = 4000
+_OUTLINE_RETRY_INSTRUCTION = (
+    "\n\n重要：不要输出分析、推理过程或 Markdown 代码围栏；"
+    "直接输出一个简洁且完整的 JSON 对象。"
+)
 
 
 class SectionOutline(BaseModel):
@@ -73,10 +84,83 @@ class OutlineBuilder:
         return outline
 
     def _invoke_llm(self, prompt: str) -> str:
-        """调用LLM生成大纲"""
-        message: BaseMessage = self._llm.invoke(prompt)  # type: ignore[assignment]
-        content = getattr(message, "content", None) or str(message)
-        return content.strip()
+        """调用LLM生成大纲，并对百炼 Qwen 的空输出做一次有界重试。"""
+        invocation_kwargs = self._structured_invocation_kwargs()
+        message: BaseMessage = self._llm.invoke(  # type: ignore[assignment]
+            prompt,
+            **invocation_kwargs,
+        )
+        content = self._message_content(message)
+        if content:
+            return content
+
+        first_finish_reason = self._finish_reason(message)
+        _LOGGER.warning(
+            "OutlineBuilder 返回空内容，finish_reason=%s，将进行一次有界重试",
+            first_finish_reason,
+        )
+        retry_kwargs = dict(invocation_kwargs)
+        if self._uses_bailian_qwen():
+            retry_kwargs["max_tokens"] = max(
+                _OUTLINE_RETRY_MAX_TOKENS,
+                LLM_MAX_TOKENS or 0,
+            )
+        retry_message: BaseMessage = self._llm.invoke(  # type: ignore[assignment]
+            prompt + _OUTLINE_RETRY_INSTRUCTION,
+            **retry_kwargs,
+        )
+        retry_content = self._message_content(retry_message)
+        if retry_content:
+            return retry_content
+
+        retry_finish_reason = self._finish_reason(retry_message)
+        raise ValueError(
+            "纲要生成连续返回空内容"
+            f"，finish_reason={retry_finish_reason or first_finish_reason or 'unknown'}"
+        )
+
+    def _structured_invocation_kwargs(self) -> Dict[str, Any]:
+        """只对百炼 Qwen 的结构化输出关闭 thinking。"""
+        if self._uses_bailian_qwen():
+            return {"extra_body": {"enable_thinking": False}}
+        return {}
+
+    def _uses_bailian_qwen(self) -> bool:
+        model_name = (
+            getattr(self._llm, "model_name", None)
+            or getattr(self._llm, "model", None)
+            or OPENAI_LLM_MODEL
+            or ""
+        )
+        base_url = (
+            getattr(self._llm, "openai_api_base", None)
+            or getattr(self._llm, "base_url", None)
+            or OPENAI_BASE_URL
+        )
+        return "qwen" in str(model_name).lower() and is_bailian_compatible_url(
+            str(base_url) if base_url else None
+        )
+
+    @staticmethod
+    def _message_content(message: BaseMessage) -> str:
+        content = getattr(message, "content", None)
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+            return "".join(parts).strip()
+        return ""
+
+    @staticmethod
+    def _finish_reason(message: BaseMessage) -> Optional[str]:
+        metadata = getattr(message, "response_metadata", None) or {}
+        value = metadata.get("finish_reason")
+        return str(value) if value else None
 
     def _parse_response(self, response: str) -> Dict[str, Any]:
         """

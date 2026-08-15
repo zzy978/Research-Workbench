@@ -66,6 +66,7 @@ class PlanReviewer:
         assumptions: list[str],
         background_info: Optional[str] = None,
         user_intent: Optional[str] = None,
+        source_mode: str = "graphrag",
     ) -> PlanReviewOutcome:
         """
         对任务图执行审校并输出PlanSpec
@@ -92,8 +93,11 @@ class PlanReviewer:
         validation_data = parsed.get("validation_results") or {}
 
         reviewed_task_graph = self._resolve_task_graph(parsed.get("task_graph"), task_graph)
+        for node in reviewed_task_graph.nodes:
+            node.source_mode = source_mode  # type: ignore[assignment]
 
         plan_spec = PlanSpec(
+            source_mode=source_mode,  # type: ignore[arg-type]
             problem_statement=ProblemStatement(**problem_statement),
             assumptions=assumptions,
             task_graph=reviewed_task_graph,

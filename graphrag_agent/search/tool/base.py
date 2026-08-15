@@ -6,7 +6,6 @@ from langchain_core.tools import BaseTool
 
 from graphrag_agent.models.get_models import get_llm_model, get_embeddings_model
 from graphrag_agent.cache_manager.manager import CacheManager, ContextAndKeywordAwareCacheKeyStrategy, MemoryCacheBackend
-from graphrag_agent.config.neo4jdb import get_db_manager
 from graphrag_agent.search.utils import VectorUtils
 from graphrag_agent.config.settings import BASE_SEARCH_CONFIG
 
@@ -14,7 +13,7 @@ from graphrag_agent.config.settings import BASE_SEARCH_CONFIG
 class BaseSearchTool(ABC):
     """搜索工具基础类，为各种搜索实现提供通用功能"""
     
-    def __init__(self, cache_dir: str = "./cache/search"):
+    def __init__(self, cache_dir: str = "./cache/search", *, enable_graph: bool = True):
         """
         初始化搜索工具
         
@@ -46,10 +45,14 @@ class BaseSearchTool(ABC):
         }
         
         # 初始化Neo4j连接
-        self._setup_neo4j()
+        self.graph = None
+        self.driver = None
+        if enable_graph:
+            self._setup_neo4j()
     
     def _setup_neo4j(self):
         """设置Neo4j连接"""
+        from graphrag_agent.config.neo4jdb import get_db_manager
         # 获取数据库连接管理器
         db_manager = get_db_manager()
         
@@ -71,6 +74,7 @@ class BaseSearchTool(ABC):
             查询结果
         """
         # 使用连接管理器执行查询
+        from graphrag_agent.config.neo4jdb import get_db_manager
         return get_db_manager().execute_query(cypher, params)
         
     @abstractmethod

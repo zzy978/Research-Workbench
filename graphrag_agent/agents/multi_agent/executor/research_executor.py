@@ -29,7 +29,6 @@ from graphrag_agent.agents.multi_agent.executor.base_executor import (
     TaskExecutionResult,
 )
 from graphrag_agent.agents.multi_agent.tools.evidence_tracker import get_evidence_tracker
-from graphrag_agent.search.tool_registry import TOOL_REGISTRY
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -133,6 +132,7 @@ class ResearchExecutor(BaseExecutor):
 
     def _get_tool_instance(self, task_type: str) -> Any:
         if task_type not in self._tool_cache:
+            from graphrag_agent.search.tool_registry import TOOL_REGISTRY
             if task_type not in TOOL_REGISTRY:
                 raise KeyError(f"未注册的研究工具: {task_type}")
             self._tool_cache[task_type] = TOOL_REGISTRY[task_type]()

@@ -16,6 +16,9 @@ from graphrag_agent.agents.multi_agent.integration.multi_agent_factory import (
 )
 from graphrag_agent.agents.multi_agent.orchestrator import OrchestratorResult
 from graphrag_agent.persistence.trajectory_exporter import TrajectoryExporter
+from graphrag_agent.harness.contracts import SourceMode
+from graphrag_agent.retrieval.base import RetrievalProvider
+from graphrag_agent.retrieval.router import RetrievalRouter
 
 
 class MultiAgentFacade:
@@ -27,11 +30,15 @@ class MultiAgentFacade:
         bundle: Optional[OrchestratorBundle] = None,
         cache_manager: Optional[CacheManager] = None,
         trajectory_exporter: Optional[TrajectoryExporter] = None,
+        retrieval_provider: Optional[RetrievalProvider] = None,
+        retrieval_router: Optional[RetrievalRouter] = None,
     ) -> None:
         self.cache_manager = cache_manager
         self.trajectory_exporter = trajectory_exporter
         self.bundle = bundle or MultiAgentFactory.create_default_bundle(
-            cache_manager=cache_manager
+            cache_manager=cache_manager,
+            retrieval_provider=retrieval_provider,
+            retrieval_router=retrieval_router,
         )
 
     def process_query(
@@ -41,9 +48,10 @@ class MultiAgentFacade:
         assumptions: Optional[Sequence[str]] = None,
         report_type: Optional[str] = None,
         extra_messages: Optional[Iterable[HumanMessage]] = None,
+        source_mode: SourceMode | str = SourceMode.GRAPHRAG,
     ) -> Dict[str, Any]:
         """执行多智能体流程，并返回与旧协调器兼容的结构化结果。"""
-        state = self._build_state(query, extra_messages)
+        state = self._build_state(query, extra_messages, source_mode=source_mode)
         result = self.bundle.orchestrator.run(
             state,
             assumptions=assumptions,
@@ -66,11 +74,17 @@ class MultiAgentFacade:
         self,
         query: str,
         extra_messages: Optional[Iterable[HumanMessage]],
+        *,
+        source_mode: SourceMode | str,
     ) -> PlanExecuteState:
         messages = [HumanMessage(content=query)]
         if extra_messages:
             messages.extend(extra_messages)
-        return PlanExecuteState(messages=messages, input=query)
+        return PlanExecuteState(
+            messages=messages,
+            input=query,
+            source_mode=SourceMode(source_mode).value,
+        )
 
     def _format_result(
         self,
@@ -91,6 +105,9 @@ class MultiAgentFacade:
 
         payload: Dict[str, Any] = {
             "status": orchestrator_result.status,
+            "run_id": state.run_id,
+            "source_mode": state.source_mode,
+            "workflow_mode": state.workflow_mode,
             "response": response,
             "planner": planner.model_dump(mode="json") if planner else None,
             "execution_records": execution_records,

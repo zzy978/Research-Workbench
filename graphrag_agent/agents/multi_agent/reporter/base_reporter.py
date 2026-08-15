@@ -660,7 +660,11 @@ class BaseReporter:
             entry: Dict[str, Any] = {
                 "id": eid,
                 "source": result.source,
+                "source_mode": result.source_mode,
+                "source_label": "[Web]" if result.source_mode == "web" else "[私有库]",
                 "source_id": getattr(result.metadata, "source_id", ""),
+                "url": getattr(result.metadata, "url", None),
+                "domain": getattr(result.metadata, "domain", None),
                 "granularity": result.granularity,
                 "snippet": snippet,
             }

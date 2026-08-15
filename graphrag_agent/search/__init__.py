@@ -1,23 +1,29 @@
-# 搜索模块初始化文件
-# 包含基础搜索类和高级搜索工具类
+"""Search package with lazy public exports.
 
-# 导出主要类
-from graphrag_agent.search.local_search import LocalSearch
-from graphrag_agent.search.global_search import GlobalSearch
+Keeping imports lazy lets a Web-only process start without initializing Neo4j.
+"""
 
-# 导出工具类
-from graphrag_agent.search.tool.local_search_tool import LocalSearchTool
-from graphrag_agent.search.tool.global_search_tool import GlobalSearchTool
-from graphrag_agent.search.tool.hybrid_tool import HybridSearchTool
-from graphrag_agent.search.tool.naive_search_tool import NaiveSearchTool
-from graphrag_agent.search.tool.deep_research_tool import DeepResearchTool
+from importlib import import_module
 
-__all__ = [
-    "LocalSearch",
-    "GlobalSearch",
-    "LocalSearchTool",
-    "GlobalSearchTool",
-    "HybridSearchTool",
-    "NaiveSearchTool",
-    "DeepResearchTool"
-]
+
+_EXPORTS = {
+    "LocalSearch": ("graphrag_agent.search.local_search", "LocalSearch"),
+    "GlobalSearch": ("graphrag_agent.search.global_search", "GlobalSearch"),
+    "LocalSearchTool": ("graphrag_agent.search.tool.local_search_tool", "LocalSearchTool"),
+    "GlobalSearchTool": ("graphrag_agent.search.tool.global_search_tool", "GlobalSearchTool"),
+    "HybridSearchTool": ("graphrag_agent.search.tool.hybrid_tool", "HybridSearchTool"),
+    "NaiveSearchTool": ("graphrag_agent.search.tool.naive_search_tool", "NaiveSearchTool"),
+    "DeepResearchTool": ("graphrag_agent.search.tool.deep_research_tool", "DeepResearchTool"),
+}
+
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name: str):
+    target = _EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(name)
+    module_name, attribute = target
+    value = getattr(import_module(module_name), attribute)
+    globals()[name] = value
+    return value

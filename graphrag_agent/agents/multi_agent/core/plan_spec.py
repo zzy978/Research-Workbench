@@ -21,6 +21,7 @@ TASK_TYPE_CHOICES: Tuple[str, ...] = (
     "chain_exploration",
     "reflection",
     "custom",
+    "web_search",
 )
 
 TaskTypeLiteral = Literal[
@@ -33,6 +34,7 @@ TaskTypeLiteral = Literal[
     "chain_exploration",
     "reflection",
     "custom",
+    "web_search",
 ]
 
 
@@ -78,6 +80,11 @@ class TaskNode(BaseModel):
 
     # 任务类型
     task_type: TaskTypeLiteral = Field(description="任务类型")
+
+    source_mode: Literal["graphrag", "web"] = Field(
+        default="graphrag",
+        description="任务冻结的信息源",
+    )
 
     # 任务描述
     description: str = Field(description="任务的详细描述")
@@ -308,6 +315,11 @@ class PlanSpec(BaseModel):
     # 版本号
     version: int = Field(default=1, description="计划版本号")
 
+    source_mode: Literal["graphrag", "web"] = Field(
+        default="graphrag",
+        description="Run 冻结的信息源",
+    )
+
     # 问题陈述
     problem_statement: ProblemStatement = Field(description="问题陈述和背景")
 
@@ -346,6 +358,11 @@ class PlanSpec(BaseModel):
         """
         try:
             self.task_graph.validate_dependencies()
+            for node in self.task_graph.nodes:
+                if node.source_mode != self.source_mode:
+                    raise ValueError(
+                        f"任务 {node.task_id} 的 source_mode={node.source_mode} 与计划 {self.source_mode} 不一致"
+                    )
             return True
         except ValueError as e:
             raise ValueError(f"计划验证失败: {str(e)}")
@@ -381,6 +398,7 @@ class PlanSpec(BaseModel):
         return {
             "plan_id": self.plan_id,
             "version": self.version,
+            "source_mode": self.source_mode,
             "problem_statement": self.problem_statement.model_dump(),
             "assumptions": self.assumptions,
             "task_graph": self.task_graph.to_dict(),
@@ -398,6 +416,7 @@ class PlanSpec(BaseModel):
         return PlanExecutionSignal(
             plan_id=self.plan_id,
             version=self.version,
+            source_mode=self.source_mode,
             execution_mode=self.task_graph.execution_mode,
             tasks=[node.model_dump() for node in self.task_graph.nodes],
             execution_sequence=[node.task_id for node in ordered_nodes],
@@ -412,6 +431,7 @@ class PlanExecutionSignal(BaseModel):
     """
     plan_id: str = Field(description="计划唯一标识")
     version: int = Field(description="计划版本号")
+    source_mode: Literal["graphrag", "web"] = Field(default="graphrag", description="冻结的信息源")
     execution_mode: Literal["sequential", "parallel", "adaptive"] = Field(description="建议执行模式")
     tasks: List[Dict[str, Any]] = Field(description="任务节点详细信息列表")
     execution_sequence: List[str] = Field(description="拓扑排序后的任务执行顺序")

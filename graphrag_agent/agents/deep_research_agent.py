@@ -12,10 +12,11 @@ from graphrag_agent.config.prompts import (
     CONTRADICTION_IMPACT_PROMPT,
 )
 from graphrag_agent.config.settings import response_type
-from graphrag_agent.search.tool.deeper_research_tool import DeeperResearchTool
 from graphrag_agent.search.tool.deep_research_tool import DeepResearchTool 
 
 from graphrag_agent.agents.base import BaseAgent
+from graphrag_agent.harness.contracts import SourceMode
+from graphrag_agent.retrieval.base import RetrievalProvider
 
 
 class DeepResearchAgent(BaseAgent):
@@ -34,7 +35,7 @@ class DeepResearchAgent(BaseAgent):
     8. 推理链分析
     """
     
-    def __init__(self, use_deeper_tool=True):
+    def __init__(self, use_deeper_tool=True, *, retrieval_provider: Optional[RetrievalProvider] = None, run_id: Optional[str] = None):
         """
         初始化增强版深度研究Agent
         
@@ -42,12 +43,15 @@ class DeepResearchAgent(BaseAgent):
             use_deeper_tool: 是否使用增强版研究工具
         """
         # 初始化研究工具
-        self.use_deeper_tool = use_deeper_tool
+        self.retrieval_provider = retrieval_provider
+        self.run_id = run_id
+        self.use_deeper_tool = bool(use_deeper_tool and (retrieval_provider is None or retrieval_provider.mode == SourceMode.GRAPHRAG))
         
-        if use_deeper_tool:
+        if self.use_deeper_tool:
             # 使用增强版研究工具
             try:
-                self.research_tool = DeeperResearchTool()
+                from graphrag_agent.search.tool.deeper_research_tool import DeeperResearchTool
+                self.research_tool = DeeperResearchTool(provider=retrieval_provider, run_id=run_id)
                 print("已加载增强版深度研究工具")
                 
                 # 加载额外工具
@@ -56,14 +60,14 @@ class DeepResearchAgent(BaseAgent):
                 self.stream_tool = self.research_tool.get_stream_tool()
             except Exception as e:
                 print(f"加载增强版研究工具失败: {e}，将使用标准版")
-                self.research_tool = DeepResearchTool()
+                self.research_tool = DeepResearchTool(provider=retrieval_provider, run_id=run_id)
                 self.use_deeper_tool = False
                 
                 # 标准版工具
                 self.stream_tool = self.research_tool.get_thinking_stream_tool()
         else:
             # 使用标准版研究工具
-            self.research_tool = DeepResearchTool()
+            self.research_tool = DeepResearchTool(provider=retrieval_provider, run_id=run_id)
             self.stream_tool = self.research_tool.get_thinking_stream_tool()
         
         # 设置缓存目录
@@ -588,12 +592,15 @@ class DeepResearchAgent(BaseAgent):
             str: 状态消息
         """
         # 切换工具
+        if use_deeper and self.retrieval_provider is not None and self.retrieval_provider.mode == SourceMode.WEB:
+            return "Web 信息源不启用知识图谱专用增强工具，继续使用标准 DeepResearch"
         self.use_deeper_tool = use_deeper
         
         if use_deeper:
             # 切换到增强版
             try:
-                self.research_tool = DeeperResearchTool()
+                from graphrag_agent.search.tool.deeper_research_tool import DeeperResearchTool
+                self.research_tool = DeeperResearchTool(provider=self.retrieval_provider, run_id=self.run_id)
                 
                 # 加载额外工具
                 self.exploration_tool = self.research_tool.get_exploration_tool()
@@ -609,7 +616,7 @@ class DeepResearchAgent(BaseAgent):
                 return f"切换到增强版失败: {e}"
         else:
             # 切换回标准版
-            self.research_tool = DeepResearchTool()
+            self.research_tool = DeepResearchTool(provider=self.retrieval_provider, run_id=self.run_id)
             self.stream_tool = self.research_tool.get_thinking_stream_tool() if hasattr(self.research_tool, 'get_thinking_stream_tool') else None
             # 清除增强工具
             self.exploration_tool = None

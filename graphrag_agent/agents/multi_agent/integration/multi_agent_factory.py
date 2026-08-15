@@ -20,6 +20,8 @@ from graphrag_agent.config.settings import (
     MULTI_AGENT_STOP_ON_CLARIFICATION,
     MULTI_AGENT_STRICT_PLAN_SIGNAL,
 )
+from graphrag_agent.retrieval.base import RetrievalProvider
+from graphrag_agent.retrieval.router import RetrievalRouter
 
 
 @dataclass
@@ -44,9 +46,14 @@ class MultiAgentFactory:
         orchestrator_config: Optional[OrchestratorConfig] = None,
         reporter_config: Optional[ReporterConfig] = None,
         cache_manager: Optional[CacheManager] = None,
+        retrieval_provider: Optional[RetrievalProvider] = None,
+        retrieval_router: Optional[RetrievalRouter] = None,
     ) -> OrchestratorBundle:
         planner = planner or BasePlanner()
-        worker = worker or WorkerCoordinator()
+        worker = worker or WorkerCoordinator(
+            retrieval_provider=retrieval_provider,
+            retrieval_router=retrieval_router,
+        )
         reporter = reporter or BaseReporter(
             config=reporter_config,
             cache_manager=cache_manager,

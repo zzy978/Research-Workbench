@@ -5,7 +5,7 @@
 使用pydantic.BaseModel实现自动序列化和字段验证
 """
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 from datetime import datetime
 import uuid
 
@@ -172,6 +172,14 @@ class PlanExecuteState(BaseModel):
         default_factory=lambda: str(uuid.uuid4()),
         description="会话唯一标识符"
     )
+
+    run_id: str = Field(default_factory=lambda: f"run_{uuid.uuid4().hex}", description="当前研究 Run ID")
+    source_mode: Literal["graphrag", "web"] = Field(default="graphrag", description="冻结的信息源")
+    workflow_mode: Literal["deep_research", "plan_execute_report"] = Field(
+        default="plan_execute_report", description="研究工作流",
+    )
+    budget_state: Dict[str, Any] = Field(default_factory=dict, description="Harness 预算快照")
+    context_snapshot: Dict[str, Any] = Field(default_factory=dict, description="可恢复上下文快照")
 
     # 兼容现有AgentState：消息列表
     messages: List[BaseMessage] = Field(

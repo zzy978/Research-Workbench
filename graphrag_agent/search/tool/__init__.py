@@ -1,26 +1,29 @@
-# 搜索工具初始化文件
-# 包含各种搜索工具类
+"""Search tool package with lazy public exports for source isolation."""
 
-from graphrag_agent.search.tool.base import BaseSearchTool
-from graphrag_agent.search.tool.local_search_tool import LocalSearchTool
-from graphrag_agent.search.tool.global_search_tool import GlobalSearchTool
-from graphrag_agent.search.tool.hybrid_tool import HybridSearchTool
-from graphrag_agent.search.tool.naive_search_tool import NaiveSearchTool
-from graphrag_agent.search.tool.deep_research_tool import DeepResearchTool
-from graphrag_agent.search.tool.deeper_research_tool import DeeperResearchTool
-from graphrag_agent.search.tool.chain_exploration_tool import ChainOfExplorationTool
-from graphrag_agent.search.tool.hypothesis_tool import HypothesisGeneratorTool
-from graphrag_agent.search.tool.validation_tool import AnswerValidationTool
+from importlib import import_module
 
-__all__ = [
-    "BaseSearchTool",
-    "LocalSearchTool",
-    "GlobalSearchTool",
-    "HybridSearchTool",
-    "NaiveSearchTool",
-    "DeepResearchTool",
-    "DeeperResearchTool",
-    "ChainOfExplorationTool",
-    "HypothesisGeneratorTool",
-    "AnswerValidationTool",
-]
+
+_EXPORTS = {
+    "BaseSearchTool": ("graphrag_agent.search.tool.base", "BaseSearchTool"),
+    "LocalSearchTool": ("graphrag_agent.search.tool.local_search_tool", "LocalSearchTool"),
+    "GlobalSearchTool": ("graphrag_agent.search.tool.global_search_tool", "GlobalSearchTool"),
+    "HybridSearchTool": ("graphrag_agent.search.tool.hybrid_tool", "HybridSearchTool"),
+    "NaiveSearchTool": ("graphrag_agent.search.tool.naive_search_tool", "NaiveSearchTool"),
+    "DeepResearchTool": ("graphrag_agent.search.tool.deep_research_tool", "DeepResearchTool"),
+    "DeeperResearchTool": ("graphrag_agent.search.tool.deeper_research_tool", "DeeperResearchTool"),
+    "ChainOfExplorationTool": ("graphrag_agent.search.tool.chain_exploration_tool", "ChainOfExplorationTool"),
+    "HypothesisGeneratorTool": ("graphrag_agent.search.tool.hypothesis_tool", "HypothesisGeneratorTool"),
+    "AnswerValidationTool": ("graphrag_agent.search.tool.validation_tool", "AnswerValidationTool"),
+}
+
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name: str):
+    target = _EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(name)
+    module_name, attribute = target
+    value = getattr(import_module(module_name), attribute)
+    globals()[name] = value
+    return value

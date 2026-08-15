@@ -47,7 +47,7 @@ class TaskDecomposer:
         self._llm = llm or get_llm_model()
         self._max_tasks = max_tasks
 
-    def decompose(self, query: str) -> TaskDecompositionResult:
+    def decompose(self, query: str, *, source_mode: str = "graphrag") -> TaskDecompositionResult:
         """
         根据查询生成TaskGraph
 
@@ -61,11 +61,22 @@ class TaskDecomposer:
             query=query,
             max_tasks=self._max_tasks,
         )
+        if source_mode == "web":
+            prompt += (
+                "\n\n【不可覆盖的信息源约束】本 Run 的 source_mode=web。"
+                "所有检索任务只能使用 web_search、deep_research 或 deeper_research；"
+                "禁止 local_search/global_search/hybrid_search/naive_search/chain_exploration。"
+            )
+        else:
+            prompt += (
+                "\n\n【不可覆盖的信息源约束】本 Run 的 source_mode=graphrag。"
+                "禁止生成 web_search；检索只能使用私有知识图谱工具。"
+            )
 
         _LOGGER.debug("TaskDecomposer prompt: %s", prompt)
         response = self._invoke_llm(prompt)
         parsed = self._parse_response(response)
-        task_graph = self._build_task_graph(parsed)
+        task_graph = self._build_task_graph(parsed, source_mode=source_mode)
         _LOGGER.debug("TaskDecomposer graph: %s", task_graph.to_dict())
         return TaskDecompositionResult(
             task_graph=task_graph,
@@ -86,7 +97,7 @@ class TaskDecomposer:
             _LOGGER.error("TaskDecomposer JSON解析失败: %s | 原始输出: %s", exc, response)
             raise ValueError("无法解析任务分解输出为有效JSON") from exc
 
-    def _build_task_graph(self, data: Dict[str, Any]) -> TaskGraph:
+    def _build_task_graph(self, data: Dict[str, Any], *, source_mode: str = "graphrag") -> TaskGraph:
         """
         将原始JSON转换为TaskGraph模型
 
@@ -102,6 +113,12 @@ class TaskDecomposer:
             node_dict = dict(raw)
 
             task_type = node_dict.get("task_type", "custom")
+            if source_mode == "web" and task_type in {
+                "local_search", "global_search", "hybrid_search", "naive_search", "chain_exploration"
+            }:
+                task_type = "web_search"
+            elif source_mode == "graphrag" and task_type == "web_search":
+                task_type = "hybrid_search"
             if task_type not in _ALLOWED_TASK_TYPES:
                 original_type = task_type
                 task_type = "custom"
@@ -109,6 +126,7 @@ class TaskDecomposer:
                 parameters = node_dict.setdefault("parameters", {})
                 parameters["original_task_type"] = original_type
             node_dict["task_type"] = task_type
+            node_dict["source_mode"] = source_mode
 
             # 补充必备字段
             node_dict.setdefault("priority", 2)

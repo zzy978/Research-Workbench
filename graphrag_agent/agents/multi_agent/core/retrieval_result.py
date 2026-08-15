@@ -5,7 +5,7 @@
 """
 
 from typing import Union, Dict, Any, Optional, Literal, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 from pydantic import BaseModel, Field
@@ -21,6 +21,7 @@ RETRIEVAL_SOURCE_CHOICES: Tuple[str, ...] = (
     "graph_search",
     "hybrid",
     "custom",
+    "tavily_search",
 )
 
 RetrievalSourceLiteral = Literal[
@@ -34,6 +35,7 @@ RetrievalSourceLiteral = Literal[
     "graph_search",
     "hybrid",
     "custom",
+    "tavily_search",
 ]
 
 
@@ -53,7 +55,8 @@ class RetrievalMetadata(BaseModel):
         "entity",
         "relationship",
         "community",
-        "subgraph"
+        "subgraph",
+        "webpage",
     ] = Field(description="数据源类型")
 
     # 置信度 (0.0-1.0)
@@ -66,9 +69,19 @@ class RetrievalMetadata(BaseModel):
 
     # 数据时间戳（用于过滤过期数据）
     timestamp: datetime = Field(
-        default_factory=datetime.now,
+        default_factory=lambda: datetime.now(timezone.utc),
         description="数据的时间戳"
     )
+
+    title: Optional[str] = Field(default=None, description="来源标题")
+    url: Optional[str] = Field(default=None, description="规范化网页 URL")
+    domain: Optional[str] = Field(default=None, description="网页域名")
+    published_at: Optional[datetime] = Field(default=None, description="来源发布时间")
+    retrieved_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="检索时间",
+    )
+    content_hash: Optional[str] = Field(default=None, description="规范化正文 SHA-256")
 
     # DO层级（Digital Object层级）
     do_level: Optional[Literal["L0-DO", "L1-DO", "L2-DO"]] = Field(
@@ -128,6 +141,11 @@ class RetrievalResult(BaseModel):
     # 检索来源
     source: RetrievalSourceLiteral = Field(description="检索来源工具")
 
+    source_mode: Literal["graphrag", "web"] = Field(
+        default="graphrag",
+        description="产生本证据的冻结 Run 信息源",
+    )
+
     # 相似度/相关性分数 (0.0-1.0)
     score: float = Field(
         default=0.5,
@@ -137,7 +155,7 @@ class RetrievalResult(BaseModel):
     )
 
     # 创建时间
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def get_citation(self, format_type: str = "default") -> str:
         """
@@ -157,10 +175,11 @@ class RetrievalResult(BaseModel):
             return f'[{self.result_id[:8]}] "{self.metadata.source_type}." {self.metadata.source_id}, {self.metadata.timestamp.year}.'
         else:
             # 默认格式
+            mode_label = "[Web]" if self.source_mode == "web" else "[私有库]"
             source_desc = f"{self.metadata.source_type}:{self.metadata.source_id}"
             if self.metadata.community_id:
                 source_desc += f" (社区:{self.metadata.community_id})"
-            return f"[{self.result_id[:8]}] 来源: {source_desc} (置信度:{self.metadata.confidence:.2f})"
+            return f"{mode_label} [{self.result_id[:8]}] 来源: {source_desc} (置信度:{self.metadata.confidence:.2f})"
 
     @classmethod
     def merge(cls, results: list["RetrievalResult"]) -> "RetrievalResult":
@@ -193,6 +212,7 @@ class RetrievalResult(BaseModel):
             "evidence": self.evidence,
             "metadata": self.metadata.model_dump(),
             "source": self.source,
+            "source_mode": self.source_mode,
             "score": self.score,
             "created_at": self.created_at.isoformat()
         }
@@ -220,6 +240,7 @@ class RetrievalResult(BaseModel):
             evidence=data["evidence"],
             metadata=metadata,
             source=data["source"],
+            source_mode=data.get("source_mode", "graphrag"),
             score=data.get("score", 0.5),
             created_at=created_at
         )

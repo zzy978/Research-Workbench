@@ -41,7 +41,8 @@ class ReflectionExecutor(BaseExecutor):
         validation_tool: Optional[AnswerValidationTool] = None,
     ) -> None:
         super().__init__(config)
-        self._validation_tool = validation_tool or AnswerValidationTool()
+        self._validation_tool = validation_tool
+        self._validation_tools: Dict[str, AnswerValidationTool] = {}
 
     def can_handle(self, task_type: str) -> bool:
         return task_type == "reflection"
@@ -86,7 +87,13 @@ class ReflectionExecutor(BaseExecutor):
             error = "未找到可验证的答案"
         else:
             try:
-                validation_payload = self._validation_tool.validate(
+                validation_tool = self._validation_tool
+                if validation_tool is None:
+                    validation_tool = self._validation_tools.setdefault(
+                        state.source_mode,
+                        AnswerValidationTool(enable_graph=state.source_mode == "graphrag"),
+                    )
+                validation_payload = validation_tool.validate(
                     query,
                     evaluation_text,
                     reference_keywords=reference_keywords,

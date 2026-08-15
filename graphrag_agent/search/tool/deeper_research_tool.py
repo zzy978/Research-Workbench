@@ -45,7 +45,7 @@ class DeeperResearchTool:
     提供更全面的深度研究能力，并充分利用所有高级推理功能
     """
     
-    def __init__(self, config=None, llm=None, embeddings=None, graph=None):
+    def __init__(self, config=None, llm=None, embeddings=None, graph=None, provider=None, run_id=None):
         """
         初始化增强版深度研究工具
         
@@ -90,7 +90,7 @@ class DeeperResearchTool:
         self.evidence_tracker = EvidenceChainTracker()
         
         # 5. 继承原有的深度研究工具功能
-        self.deep_research = DeepResearchTool()
+        self.deep_research = DeepResearchTool(provider=provider, run_id=run_id)
 
         # 6. 查询生成器
         self.query_generator = self.deep_research.query_generator
@@ -614,7 +614,7 @@ class DeeperResearchTool:
                                 })
                     
                     # 原始搜索，合并结果
-                    kbinfos = self.deep_research.dual_searcher.search(search_query)
+                    kbinfos = self.deep_research._search_current_provider(search_query)
                     
                     # 将探索内容加入结果
                     if exploration_content:

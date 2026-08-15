@@ -1,4 +1,5 @@
 .venv/
+.obsidian/
 __pycache__/
 *.pyc
 .env

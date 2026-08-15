@@ -6,6 +6,7 @@
 from typing import Any, Dict, List, Optional
 import time
 import logging
+import uuid
 
 from graphrag_agent.agents.multi_agent.core.execution_record import (
     ExecutionMetadata,
@@ -23,12 +24,12 @@ from graphrag_agent.agents.multi_agent.executor.base_executor import (
     ExecutorConfig,
     TaskExecutionResult,
 )
-from graphrag_agent.search.tool_registry import (
-    TOOL_REGISTRY,
-    EXTRA_TOOL_FACTORIES,
-    create_extra_tool,
-)
 from graphrag_agent.agents.multi_agent.tools.evidence_tracker import get_evidence_tracker
+from graphrag_agent.harness.contracts import SourceMode
+from graphrag_agent.harness.policies import SourcePolicy
+from graphrag_agent.harness.evidence import EvidenceLedger
+from graphrag_agent.retrieval.base import RetrievalProvider, SearchFilters, ToolCallContext, run_async_from_sync
+from graphrag_agent.retrieval.router import RetrievalRouter, create_default_router
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,15 +47,26 @@ class RetrievalExecutor(BaseExecutor):
         *,
         tool_registry: Optional[Dict[str, Any]] = None,
         extra_tool_factories: Optional[Dict[str, Any]] = None,
+        provider: Optional[RetrievalProvider] = None,
+        router: Optional[RetrievalRouter] = None,
+        source_policy: Optional[SourcePolicy] = None,
+        evidence_ledger: Optional[EvidenceLedger] = None,
     ) -> None:
         super().__init__(config)
-        self._tool_registry = tool_registry or TOOL_REGISTRY
-        self._extra_factories = extra_tool_factories or EXTRA_TOOL_FACTORIES
+        self._tool_registry = dict(tool_registry) if tool_registry is not None else None
+        self._extra_factories = dict(extra_tool_factories) if extra_tool_factories is not None else None
         self._tool_cache: Dict[str, Any] = {}
         self._extra_cache: Dict[str, Any] = {}
+        self._provider = provider
+        self._router = router or (None if provider is not None else create_default_router())
+        self._source_policy = source_policy or SourcePolicy()
+        self._evidence_ledger = evidence_ledger or EvidenceLedger()
 
     def can_handle(self, task_type: str) -> bool:
-        return task_type in self._tool_registry or task_type in self._extra_factories
+        return task_type in {
+            "local_search", "global_search", "hybrid_search", "naive_search",
+            "web_search", "deep_research", "deeper_research", "chain_exploration",
+        }
 
     def execute_task(
         self,
@@ -76,14 +88,27 @@ class RetrievalExecutor(BaseExecutor):
             payload,
         )
 
-        tool_instance = self._get_tool_instance(tool_name)
+        provider = self._provider or self._router.for_mode(state.source_mode)  # type: ignore[union-attr]
+        if provider.mode.value != state.source_mode or task.source_mode != state.source_mode:
+            raise ValueError("Plan/Task/Provider source_mode 不一致")
+        tool_call_id = f"call_{uuid.uuid4().hex}"
         start_time = time.perf_counter()
         success = True
         error_message: Optional[str] = None
         structured_output: Dict[str, Any] = {}
 
         try:
-            structured_output = self._invoke_tool(tool_instance, tool_name, payload)
+            if tool_name in {"deep_research", "deeper_research"}:
+                structured_output = self._invoke_research_tool(provider, tool_name, payload, state.run_id)
+            elif tool_name in {"local_search", "global_search", "hybrid_search", "naive_search", "web_search"}:
+                structured_output = self._invoke_provider(
+                    provider, tool_name, payload, state, task, tool_call_id
+                )
+            else:
+                # Graph-only legacy specialist tools remain available, but are source-gated.
+                self._source_policy.assert_tool_allowed(SourceMode(state.source_mode), tool_name)
+                tool_instance = self._get_tool_instance(tool_name)
+                structured_output = self._invoke_tool(tool_instance, tool_name, payload)
         except Exception as exc:  # noqa: BLE001
             success = False
             error_message = str(exc)
@@ -92,6 +117,8 @@ class RetrievalExecutor(BaseExecutor):
         latency = time.perf_counter() - start_time
         tool_call = ToolCall(
             tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            source_mode=state.source_mode,
             args=payload,
             result=structured_output if success else None,
             status="success" if success else "failed",
@@ -99,7 +126,10 @@ class RetrievalExecutor(BaseExecutor):
             latency_ms=round(latency * 1000, 3),
         )
 
-        evidence = self._extract_evidence(state, structured_output) if success else []
+        evidence = self._extract_evidence(
+            state, structured_output, task_id=task.task_id,
+            tool_call_id=tool_call_id, provider=provider.provider_name,
+        ) if success else []
 
         metadata = ExecutionMetadata(
             worker_type=self.worker_type,
@@ -109,6 +139,8 @@ class RetrievalExecutor(BaseExecutor):
             environment={
                 "execution_mode": signal.execution_mode,
                 "cache_key": cache_key,
+                "source_mode": state.source_mode,
+                "provider": provider.provider_name,
             },
         )
 
@@ -133,14 +165,87 @@ class RetrievalExecutor(BaseExecutor):
             error=error_message,
         )
 
+    def _invoke_provider(
+        self,
+        provider: RetrievalProvider,
+        task_type: str,
+        payload: Dict[str, Any],
+        state: PlanExecuteState,
+        task: TaskNode,
+        tool_call_id: str,
+    ) -> Dict[str, Any]:
+        actual_tool = "tavily_search" if provider.mode == SourceMode.WEB else task_type
+        self._source_policy.assert_tool_allowed(provider.mode, actual_tool)
+        query = str(payload.get("query") or task.description)
+        results = run_async_from_sync(lambda: provider.search(
+            query,
+            top_k=int(payload.get("top_k") or 5),
+            search_depth=payload.get("search_depth", "advanced"),
+            filters=SearchFilters(
+                strategy=task_type if provider.mode == SourceMode.GRAPHRAG else None,
+                include_domains=tuple(payload.get("include_domains") or ()),
+                exclude_domains=tuple(payload.get("exclude_domains") or ()),
+                start_date=payload.get("start_date"),
+                end_date=payload.get("end_date"),
+                topic=payload.get("topic"),
+            ),
+            call_context=ToolCallContext(
+                run_id=state.run_id,
+                source_mode=provider.mode,
+                task_id=task.task_id,
+                tool_call_id=tool_call_id,
+            ),
+        ))
+        if any(result.source_mode != provider.mode.value for result in results):
+            raise ValueError("Provider 返回了与 Run.source_mode 不一致的证据")
+        return {
+            "answer": "\n\n".join(str(result.evidence) for result in results),
+            "retrieval_results": [result.to_dict() for result in results],
+            "provider": provider.provider_name,
+            "source_mode": provider.mode.value,
+        }
+
+    def _invoke_research_tool(
+        self,
+        provider: RetrievalProvider,
+        task_type: str,
+        payload: Dict[str, Any],
+        run_id: str,
+    ) -> Dict[str, Any]:
+        from graphrag_agent.search.tool.deep_research_tool import DeepResearchTool
+
+        if task_type == "deeper_research" and provider.mode == SourceMode.GRAPHRAG:
+            from graphrag_agent.search.tool.deeper_research_tool import DeeperResearchTool
+            tool = DeeperResearchTool(provider=provider, run_id=run_id)
+        else:
+            tool = DeepResearchTool(provider=provider, run_id=run_id)
+        raw = tool.search(payload)
+        provider_results = getattr(tool, "provider_results", None)
+        if provider_results is None and hasattr(tool, "deep_research"):
+            provider_results = getattr(tool.deep_research, "provider_results", [])
+        return {
+            "answer": raw if isinstance(raw, str) else raw.get("answer", str(raw)),
+            "raw_result": raw,
+            "retrieval_results": [result.to_dict() for result in (provider_results or [])],
+            "provider": provider.provider_name,
+            "source_mode": provider.mode.value,
+        }
+
     def _get_tool_instance(self, task_type: str) -> Any:
+        if self._tool_registry is None or self._extra_factories is None:
+            from graphrag_agent.search.tool_registry import TOOL_REGISTRY, EXTRA_TOOL_FACTORIES
+            if self._tool_registry is None:
+                self._tool_registry = dict(TOOL_REGISTRY)
+            if self._extra_factories is None:
+                self._extra_factories = dict(EXTRA_TOOL_FACTORIES)
         if task_type in self._tool_registry:
             if task_type not in self._tool_cache:
                 self._tool_cache[task_type] = self._tool_registry[task_type]()
             return self._tool_cache[task_type]
         if task_type in self._extra_factories:
             if task_type not in self._extra_cache:
-                self._extra_cache[task_type] = create_extra_tool(task_type)
+                factory = self._extra_factories[task_type]
+                self._extra_cache[task_type] = factory()
             return self._extra_cache[task_type]
         raise KeyError(f"未找到任务类型 {task_type} 对应的检索工具")
 
@@ -174,6 +279,10 @@ class RetrievalExecutor(BaseExecutor):
         self,
         state: PlanExecuteState,
         output: Dict[str, Any],
+        *,
+        task_id: str,
+        tool_call_id: str,
+        provider: str,
     ) -> List[RetrievalResult]:
         results_payload = output.get("retrieval_results") if isinstance(output, dict) else None
         evidence: List[RetrievalResult] = []
@@ -190,6 +299,14 @@ class RetrievalExecutor(BaseExecutor):
                 _LOGGER.warning("无法解析retrieval_result: %s error=%s", item, exc)
         if not evidence:
             return evidence
+        assigned = self._evidence_ledger.assign(
+            run_id=state.run_id,
+            task_id=task_id,
+            tool_call_id=tool_call_id,
+            provider=provider,
+            results=evidence,
+        )
+        evidence = [result for result, _ in assigned]
         try:
             tracker = get_evidence_tracker(state)
             return tracker.register(evidence)
