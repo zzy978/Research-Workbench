@@ -129,6 +129,13 @@ class ContractRepository:
             checks = list((await session.execute(select(ContractCheckModel).where(ContractCheckModel.run_id == run_id, ContractCheckModel.required == 1))).scalars())
             return bool(checks) and all(check.passed == 1 for check in checks)
 
+    async def list_for_run(self, run_id: str) -> list[ContractCheckModel]:
+        async with self.database.sessions() as session:
+            result = await session.execute(
+                select(ContractCheckModel).where(ContractCheckModel.run_id == run_id).order_by(ContractCheckModel.kind)
+            )
+            return list(result.scalars())
+
 
 class ArtifactRepository:
     def __init__(self, database: Database):
@@ -146,3 +153,12 @@ class ArtifactRepository:
                 model.size_bytes = artifact.size_bytes
                 model.sha256 = artifact.sha256
             return model
+
+    async def get_report(self, run_id: str) -> Optional[ArtifactModel]:
+        async with self.database.sessions() as session:
+            result = await session.execute(
+                select(ArtifactModel)
+                .where(ArtifactModel.run_id == run_id, ArtifactModel.mime_type.like("text/markdown%"))
+                .order_by(ArtifactModel.created_at.desc())
+            )
+            return result.scalars().first()

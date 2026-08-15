@@ -231,33 +231,35 @@ class DeepResearchAgent(BaseAgent):
             error_msg = f"处理思考过程时出错: {str(e)}"
             return {"messages": [AIMessage(content=error_msg)]}
     
-    def ask(self, query: str, thread_id: str = "default", recursion_limit: Optional[int] = None, 
-            show_thinking: bool = False, exploration_mode: bool = False):
+    def ask(self, query: str, thread_id: str = "default", recursion_limit: Optional[int] = None,
+            show_thinking: bool = False, exploration_mode: bool = False, *, bypass_cache: bool = False):
         """
         向Agent提问，可选显示思考过程
-        
+
         参数:
             query: 用户问题
             thread_id: 会话ID
             recursion_limit: 递归限制
             show_thinking: 是否显示思考过程
             exploration_mode: 是否使用知识图谱探索模式
-                
+            bypass_cache: 是否跳过 answer 缓存（Web 单源 Run 必须为 True，
+                          避免复用无 provenance 的旧缓存导致验证失败）
+
         返回:
             str: 生成的回答或包含思考过程的字典
         """
         # 设置是否显示思考过程
         old_thinking = self.show_thinking
         self.show_thinking = show_thinking
-        
+
         try:
             # 检查是否使用知识图谱探索模式
             if exploration_mode and self.use_deeper_tool:
                 # 知识图谱探索模式
                 return self.explore_knowledge(query, thread_id)
-            
+
             # 正常模式 - 调用父类方法
-            result = super().ask(query, thread_id, recursion_limit)
+            result = super().ask(query, thread_id, recursion_limit, bypass_cache=bypass_cache)
             return result
         finally:
             # 重置状态

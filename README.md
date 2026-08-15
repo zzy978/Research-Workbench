@@ -50,9 +50,9 @@ The extracted package keeps only the runtime modules needed by the two agents an
 
 Generated cache files stay under `cache/`; raw input documents stay under `files/`.
 
-## Local MVP development baseline (phases 0–3)
+## Local MVP development baseline (phases 0–5)
 
-The repository now includes the phase 0 engineering baseline, phase 1 durable fact store, phase 2 unified retrieval layer, and phase 3 persistent Harness described in `HERMES_INSPIRED_LOCAL_MVP_DEVELOPMENT_EXECUTION_PLAN.md`:
+The repository now includes phases 0–5 described in `HERMES_INSPIRED_LOCAL_MVP_DEVELOPMENT_EXECUTION_PLAN.md`: the engineering baseline, durable fact store, unified retrieval, persistent Harness, FastAPI/SSE service and React browser client.
 
 - Python 3.11 is the target runtime (the code remains compatible with Python 3.10); Node.js 20 LTS and Neo4j 5.22 are the target local services.
 - The existing DeepResearch and Plan–Execute–Report entry points remain intact. Parallel PER workers execute against isolated state snapshots and the coordinator merges results deterministically.
@@ -62,7 +62,9 @@ The repository now includes the phase 0 engineering baseline, phase 1 durable fa
 - The default CLI path now creates a durable Session/Message/Run and drives both workflows through `Context → Plan → Execute → Report → Verify`. Use `--legacy` only for the pre-Harness compatibility path.
 - Run state transitions, budgets, events, checkpoints, cancellation, typed retry/replan, lease recovery, Evidence Ledger and Completion Contract checks are persisted. `completed` can only be written together with an idempotent assistant message after all required checks pass.
 - Web search requires `TAVILY_API_KEY` in the backend environment. Without it, GraphRAG still works and requesting `--source-mode web` returns an explicit unavailable/configuration error.
-- The local MVP backend must run with one FastAPI worker. Set `FASTAPI_WORKERS=1` in `.env` before later API stages are started.
+- The FastAPI service exposes health/capabilities, Session/Message/Run control, durable SSE replay, Evidence/Report reads, and the phase-appropriate Memory/Skill schemas under `/api/v1`.
+- The React client supports persistent sessions, strict per-message source selection, workflow choice, progress/SSE recovery, cancellation, clarification, reports, evidence provenance, and Memory/Skills/System Status pages.
+- The local MVP backend must run with one FastAPI worker. Set `FASTAPI_WORKERS=1` in `.env`.
 
 Install the updated dependencies and create/update the database:
 
@@ -71,12 +73,24 @@ python -m pip install -r requirements.txt
 alembic upgrade head
 ```
 
-Run the phase 0–3 tests:
+Start the backend and frontend in separate terminals:
 
 ```powershell
-python -m pytest tests/persistence tests/smoke tests/retrieval tests/harness
+uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --workers 1
+cd frontend
+npm.cmd run dev
+```
+
+Open `http://localhost:5173`. The default CORS origin is `http://localhost:5173`; add other local origins to `FRONTEND_ORIGINS` when needed.
+
+Run the phase 0–5 tests and frontend production build:
+
+```powershell
+python -m pytest -q
+cd frontend
+npm.cmd run build
 ```
 
 The migration applies SQLite WAL, foreign keys and FTS5 indexes through the configured connection. Runtime data, artifacts, frontend dependencies/build output and real environment files are ignored by Git. Do not put credentials in `.env.example`; the checked-in file contains empty placeholders only.
 
-The React directory is intentionally only a buildable phase-0 engineering shell. HTTP/SSE chat behavior belongs to phases 4–5 and is not claimed as implemented here.
+Memory extraction/context recall and Skill evaluate/promote/rollback remain gated to execution-plan phases 6–7. The phase-5 management pages show the real persisted records and Memory lifecycle operations, but do not bypass those later-stage learning and promotion gates.

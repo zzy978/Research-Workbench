@@ -458,16 +458,17 @@ class BaseAgent(ABC):
                 "execution_log": self.execution_log + [{"node": "error", "timestamp": time.time(), "input": query, "output": str(e)}]
             }
         
-    def ask(self, query: str, thread_id: str = "default", recursion_limit: Optional[int] = None):
+    def ask(self, query: str, thread_id: str = "default", recursion_limit: Optional[int] = None, *, bypass_cache: bool = False):
         """向Agent提问"""
         overall_start = time.time()
         
         # 确保查询字符串是干净的
         safe_query = query.strip()
         
-        cached_result = self._check_all_caches(safe_query, thread_id)
-        if cached_result:
-            return cached_result
+        if not bypass_cache:
+            cached_result = self._check_all_caches(safe_query, thread_id)
+            if cached_result:
+                return cached_result
         
         # 未命中缓存，执行标准流程
         process_start = time.time()
@@ -495,7 +496,7 @@ class BaseAgent(ABC):
             answer = chat_history[-1].content
             
             # 缓存处理结果 - 同时更新会话缓存和全局缓存
-            if answer and len(answer) > 10:
+            if not bypass_cache and answer and len(answer) > 10:
                 # 更新会话缓存
                 self.cache_manager.set(safe_query, answer, thread_id=thread_id)
                 # 更新全局缓存

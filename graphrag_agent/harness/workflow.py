@@ -143,6 +143,11 @@ class DeepResearchDriver:
         self._plan = payload.get("plan")
 
     async def plan(self, failures: list[str] | None = None) -> None:
+        if failures and set(failures) & {"min_evidence", "claim_support", "source_match"}:
+            # A verification-driven replan must actually execute research again;
+            # retaining the prior answer would turn replan into a no-op.
+            self.answer = None
+            self.results = []
         self._plan = {
             "plan_id": f"plan_{self.context.run_id}", "version": self.context.plan_version + 1,
             "status": "executing", "source_mode": self.context.source_mode.value,
@@ -152,7 +157,12 @@ class DeepResearchDriver:
 
     async def execute(self) -> None:
         if self.answer is None:
-            self.answer = await asyncio.to_thread(self.agent.ask, self.context.resolved_query or self.context.original_query, self.context.session_id)
+            self.answer = await asyncio.to_thread(
+                self.agent.ask,
+                self.context.resolved_query or self.context.original_query,
+                self.context.session_id,
+                bypass_cache=self.context.source_mode.value == "web",
+            )
         tool = getattr(self.agent, "research_tool", None)
         provider_results = list(getattr(tool, "provider_results", []) or [])
         if not provider_results and getattr(tool, "deep_research", None) is not None:

@@ -42,11 +42,12 @@ class HarnessRuntime:
         trajectory_repository: PlanTaskToolRepository | None = None,
         artifact_store: ArtifactStore | None = None,
         artifact_repository: ArtifactRepository | None = None,
+        event_bus: EventBus | None = None,
         lease_seconds: int = 90,
     ):
         self.runs = run_repository
         self.messages = message_repository
-        self.events = EventBus(event_repository)
+        self.events = event_bus or EventBus(event_repository)
         self.checkpoints = CheckpointManager(checkpoint_repository)
         self.evidence_repository = evidence_repository
         self.evidence_ledger = EvidenceLedger(evidence_repository)
@@ -190,6 +191,7 @@ class HarnessRuntime:
         if restored is not None:
             restored.status = RunStatus(run.status)
             restored.cancellation_requested = bool(run.cancellation_requested)
+            restored.config_snapshot.update(json.loads(run.config_snapshot_json or "{}"))
             return restored
         message = await self.messages.get(run.trigger_message_id)
         if message is None:

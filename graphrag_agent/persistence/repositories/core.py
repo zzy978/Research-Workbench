@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from sqlalchemy import and_, or_, select, text, update
+from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 
 from backend.app.schemas import MessageCreate, RunCreate, RunEventCreate, SessionCreate
@@ -44,6 +45,13 @@ class SessionRepository:
             result = await session.execute(query.order_by(SessionModel.updated_at.desc()).limit(limit).offset(max(0, offset)))
             return list(result.scalars())
 
+    async def count(self, *, include_archived: bool = False) -> int:
+        async with self.database.sessions() as session:
+            query = select(func.count()).select_from(SessionModel).where(SessionModel.deleted_at.is_(None))
+            if not include_archived:
+                query = query.where(SessionModel.status == "active")
+            return int((await session.execute(query)).scalar_one())
+
     async def rename(self, session_id: str, title: str) -> bool:
         if not title.strip():
             raise ValueError("Session 标题不能为空")
@@ -55,6 +63,15 @@ class SessionRepository:
         now = utc_now_iso()
         async with self.database.transaction() as session:
             result = await session.execute(update(SessionModel).where(SessionModel.session_id == session_id, SessionModel.deleted_at.is_(None)).values(status="archived", archived_at=now, updated_at=now))
+            return result.rowcount == 1
+
+    async def restore(self, session_id: str) -> bool:
+        async with self.database.transaction() as session:
+            result = await session.execute(
+                update(SessionModel)
+                .where(SessionModel.session_id == session_id, SessionModel.deleted_at.is_(None))
+                .values(status="active", archived_at=None, updated_at=utc_now_iso())
+            )
             return result.rowcount == 1
 
     async def soft_delete(self, session_id: str) -> bool:
@@ -93,6 +110,12 @@ class MessageRepository:
         async with self.database.sessions() as session:
             result = await session.execute(select(MessageModel).where(MessageModel.session_id == session_id).order_by(MessageModel.created_at).limit(max(1, min(limit, 500))).offset(max(0, offset)))
             return list(result.scalars())
+
+    async def get_assistant_for_run(self, run_id: str) -> Optional[MessageModel]:
+        async with self.database.sessions() as session:
+            return (await session.execute(
+                select(MessageModel).where(MessageModel.run_id == run_id, MessageModel.role == "assistant")
+            )).scalar_one_or_none()
 
     async def search(self, query: str, *, session_id: Optional[str] = None, limit: int = 20) -> list[MessageModel]:
         clause = "messages_fts MATCH :query"
@@ -220,6 +243,25 @@ class RunRepository:
         async with self.database.transaction() as session:
             result = await session.execute(update(RunModel).where(RunModel.run_id == run_id, RunModel.status.in_(self.ACTIVE_STATUSES)).values(cancellation_requested=1, updated_at=utc_now_iso()))
             return result.rowcount == 1
+
+    async def resume(self, run_id: str, *, clarification: Optional[str] = None) -> bool:
+        async with self.database.transaction() as session:
+            run = await session.get(RunModel, run_id)
+            if run is None or run.status not in {"interrupted", "needs_user_input"}:
+                return False
+            snapshot = json.loads(run.config_snapshot_json or "{}")
+            if clarification:
+                entries = list(snapshot.get("clarifications", []))
+                entries.append({"content": clarification, "created_at": utc_now_iso()})
+                snapshot["clarifications"] = entries
+            run.status = "queued"
+            run.current_stage = "queued"
+            run.cancellation_requested = 0
+            run.error_code = None
+            run.error_message = None
+            run.config_snapshot_json = json_text(snapshot)
+            run.updated_at = utc_now_iso()
+            return True
 
     async def acquire_lease(self, run_id: str, owner: str, *, ttl_seconds: int = 60) -> bool:
         now = datetime.now(timezone.utc)

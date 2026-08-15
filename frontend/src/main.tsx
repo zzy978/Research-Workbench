@@ -1,8 +1,16 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { BrowserRouter } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { App } from "./App";
+import "./styles.css";
 
-function App() {
-  return <main><h1>DeepResearch HybridRAG</h1><p>本地 MVP 前端工程已就绪；聊天功能将在阶段 5 接入。</p></main>;
-}
+const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 5_000, retry: 1 } } });
 
-ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode><App /></React.StrictMode>);
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter><App /></BrowserRouter>
+    </QueryClientProvider>
+  </React.StrictMode>,
+);
