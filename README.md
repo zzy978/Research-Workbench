@@ -1,8 +1,6 @@
 # DeepResearch HybridRAG Agent（Hermes Inspired Local MVP）
 
-一个本地部署的多智能体深度研究系统：结合**私有知识图谱（GraphRAG）**与**联网搜索（Tavily）**双信息源，参考 [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) 引入 Harness Runtime、四层持久化 Memory 与受控自进化（Skills）闭环，并通过 React 前端 + FastAPI 后端提供完整的聊天式研究体验。
-
-> 设计文档见 `HERMES_INSPIRED_LOCAL_MVP_DESIGN.md`，阶段开发记录见 `progress.md`，验收结果见 `docs/acceptance/results.md`。
+一个多智能体深度研究系统：结合**私有知识图谱与联网搜索**双信息源，引入 Harness Runtime、四层持久化 Memory 与受控自进化（Skills）闭环，并通过 React 前端 + FastAPI 后端提供完整的聊天式研究体验。
 
 ---
 
@@ -192,8 +190,3 @@ cd frontend && npm run build       # 前端类型检查 + 生产构建
 
 ---
 
-## 项目状态
-
-- 阶段 0–8 全部完成：基线冻结 → 领域模型 / SQLite / Artifact → 统一 RetrievalProvider 与 Tavily → Harness Runtime 与 Agent Loop → FastAPI + Session/SSE 与 React 前端 → 多层 context 与四层 Memory → Skills 与受控自进化 → 本地部署、轻量验收与交付。
-- 离线门禁：`python -m pytest -q` 当前 `70 passed`；前端 `tsc --noEmit` 与生产构建通过；Compose 校验通过。
-- 端到端场景：8 个场景（DeepResearch×GraphRAG/Tavily、PER×GraphRAG/Tavily、十轮对话与来源切换、中断恢复、Memory 召回、Skill 门禁等）全部 PASS，详见 `docs/acceptance/results.md`。
