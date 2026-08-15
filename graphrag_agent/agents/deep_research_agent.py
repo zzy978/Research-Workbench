@@ -86,7 +86,10 @@ class DeepResearchAgent(BaseAgent):
             self.community_enhancer = None
 
         # 调用父类构造函数
-        super().__init__(cache_dir=self.cache_dir)
+        super().__init__(
+            cache_dir=self.cache_dir,
+            enable_vector_cache=False if retrieval_provider is not None and retrieval_provider.mode == SourceMode.WEB else None,
+        )
     
     def _setup_chains(self):
         """设置处理链 - 由于我们直接使用工具，不需要特别设置"""

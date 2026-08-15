@@ -121,10 +121,7 @@ class MultiAgentOrchestrator:
         # --- Plan ---
         plan_start = time.perf_counter()
         try:
-            planner_result = self._planner.generate_plan(
-                state,
-                assumptions=list(assumptions) if assumptions else None,
-            )
+            planner_result = self.plan(state, assumptions=assumptions)
         except Exception as exc:  # noqa: BLE001
             _LOGGER.exception("Planner执行失败: %s", exc)
             errors.append(f"Planner执行失败: {exc}")
@@ -176,7 +173,7 @@ class MultiAgentOrchestrator:
         if signal is not None:
             exec_start = time.perf_counter()
             try:
-                execution_records = self._worker.execute_plan(state, signal)
+                execution_records = self.execute(state, planner_result)
             except Exception as exc:  # noqa: BLE001
                 _LOGGER.exception("执行阶段失败: %s", exc)
                 errors.append(f"执行阶段失败: {exc}")
@@ -189,10 +186,7 @@ class MultiAgentOrchestrator:
         if self.config.auto_generate_report and not errors:
             report_start = time.perf_counter()
             try:
-                report_result = self._reporter.generate_report(
-                    state,
-                    report_type=report_type,
-                )
+                report_result = self.report(state, report_type=report_type)
                 if report_result is not None:
                     self._print_report_summary(report_result)
             except Exception as exc:  # noqa: BLE001
@@ -223,6 +217,38 @@ class MultiAgentOrchestrator:
             errors=errors,
             metrics=metrics,
         )
+
+    def plan(
+        self,
+        state: PlanExecuteState,
+        *,
+        assumptions: Optional[Sequence[str]] = None,
+    ) -> PlannerResult:
+        """Run only the existing Planner stage for Harness checkpointing."""
+        return self._planner.generate_plan(
+            state,
+            assumptions=list(assumptions) if assumptions else None,
+        )
+
+    def execute(
+        self,
+        state: PlanExecuteState,
+        planner_result: PlannerResult,
+    ) -> List[ExecutionRecord]:
+        """Run only the existing WorkerCoordinator stage."""
+        signal = planner_result.executor_signal
+        if signal is None:
+            raise ValueError("Planner未提供执行信号，无法继续执行")
+        return self._worker.execute_plan(state, signal)
+
+    def report(
+        self,
+        state: PlanExecuteState,
+        *,
+        report_type: Optional[str] = None,
+    ) -> ReportResult:
+        """Run only the existing Reporter/ConsistencyChecker stage."""
+        return self._reporter.generate_report(state, report_type=report_type)
 
     def _print_plan_summary(self, planner_result: PlannerResult) -> None:
         """

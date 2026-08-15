@@ -228,6 +228,31 @@ async def test_deep_research_loop_uses_injected_provider(mode):
     assert len(provider.calls) == 1
 
 
+def test_web_deep_research_disables_vector_cache_initialization(monkeypatch):
+    calls = []
+
+    def fail_if_initialized():
+        calls.append("embedding")
+        raise AssertionError("Web DeepResearch 不应初始化向量缓存 embedding")
+
+    monkeypatch.setattr(
+        "graphrag_agent.cache_manager.manager.get_cache_embedding_provider",
+        fail_if_initialized,
+    )
+    from graphrag_agent.agents.deep_research_agent import DeepResearchAgent
+
+    agent = DeepResearchAgent(
+        use_deeper_tool=True,
+        retrieval_provider=FakeProvider(SourceMode.WEB),
+        run_id="run_web_no_vector_cache",
+    )
+    assert calls == []
+    assert agent.cache_manager.enable_vector_similarity is False
+    assert agent.global_cache_manager.enable_vector_similarity is False
+    assert agent.research_tool.cache_manager.enable_vector_similarity is False
+    agent.close()
+
+
 def test_report_references_include_deterministic_source_label():
     class Message:
         content = "formatted references"

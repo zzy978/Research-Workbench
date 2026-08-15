@@ -78,3 +78,57 @@ class ContractCheckData(BaseModel):
     explanation: Optional[str] = None
     artifact_refs: List[str] = Field(default_factory=list)
     schema_version: int = CONTRACT_SCHEMA_VERSION
+
+
+class ContractVerdict(BaseModel):
+    passed: bool
+    recoverable: bool = False
+    checks: List[ContractCheckData] = Field(default_factory=list)
+    failures: List[str] = Field(default_factory=list)
+
+
+class ContractEvaluator:
+    """Run deterministic checks first and persist their VerificationEvidence."""
+
+    def __init__(self, repository=None):
+        self.repository = repository
+
+    async def evaluate(
+        self,
+        *,
+        run_id: str,
+        source_mode: SourceMode | str,
+        report: str,
+        evidence: List[Any],
+        min_evidence: int = 1,
+        required_sections: Optional[List[str]] = None,
+        consistency_passed: Optional[bool] = None,
+    ) -> ContractVerdict:
+        from .verifiers import DeterministicVerifiers
+
+        verifier = DeterministicVerifiers(
+            run_id=run_id,
+            source_mode=SourceMode(source_mode),
+            report=report,
+            evidence=evidence,
+        )
+        checks = [
+            verifier.source_match(),
+            verifier.min_evidence(min_evidence),
+            verifier.citation_integrity(),
+            verifier.required_section(required_sections or []),
+            verifier.claim_support(),
+            verifier.report_consistency(consistency_passed),
+            verifier.source_diversity(),
+        ]
+        if self.repository is not None:
+            for check in checks:
+                await self.repository.upsert(check)
+        failures = [check.kind for check in checks if check.required and check.passed is not True]
+        locally_repairable = {"min_evidence", "citation_integrity", "required_section", "claim_support", "source_diversity"}
+        return ContractVerdict(
+            passed=not failures,
+            recoverable=bool(failures) and set(failures).issubset(locally_repairable),
+            checks=checks,
+            failures=failures,
+        )

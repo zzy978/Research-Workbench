@@ -39,10 +39,12 @@ class DeepResearchTool(BaseSearchTool):
         super().__init__(
             cache_dir="./cache/deep_research",
             enable_graph=not (provider is not None and provider.mode == SourceMode.WEB),
+            enable_vector_cache=False if provider is not None and provider.mode == SourceMode.WEB else None,
         )
         self.retrieval_provider = provider
         self.run_id = run_id or f"legacy_{uuid.uuid4().hex}"
         self.provider_results = []
+        self.provider_calls = []
 
         # 关键词缓存
         self._keywords_cache = {}
@@ -413,6 +415,7 @@ class DeepResearchTool(BaseSearchTool):
     async def _async_search(self, query: str):
         """异步执行搜索，避免阻塞事件循环"""
         if self.retrieval_provider is not None:
+            tool_call_id = f"call_{uuid.uuid4().hex}"
             results = await self.retrieval_provider.search(
                 query,
                 top_k=5,
@@ -421,12 +424,15 @@ class DeepResearchTool(BaseSearchTool):
                 call_context=ToolCallContext(
                     run_id=self.run_id,
                     source_mode=self.retrieval_provider.mode,
-                    tool_call_id=f"call_{uuid.uuid4().hex}",
+                    tool_call_id=tool_call_id,
                 ),
             )
             if any(result.source_mode != self.retrieval_provider.mode.value for result in results):
                 raise ValueError("Provider 返回了与 Run.source_mode 不一致的证据")
             self.provider_results.extend(results)
+            if not hasattr(self, "provider_calls"):
+                self.provider_calls = []
+            self.provider_calls.append({"tool_call_id": tool_call_id, "query": query, "results": results})
             return self._provider_results_to_legacy(results)
         def search_wrapper():
             return self.dual_searcher.search(query)

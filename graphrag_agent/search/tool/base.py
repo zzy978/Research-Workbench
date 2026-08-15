@@ -13,7 +13,7 @@ from graphrag_agent.config.settings import BASE_SEARCH_CONFIG
 class BaseSearchTool(ABC):
     """搜索工具基础类，为各种搜索实现提供通用功能"""
     
-    def __init__(self, cache_dir: str = "./cache/search", *, enable_graph: bool = True):
+    def __init__(self, cache_dir: str = "./cache/search", *, enable_graph: bool = True, enable_vector_cache: bool | None = None):
         """
         初始化搜索工具
         
@@ -34,7 +34,8 @@ class BaseSearchTool(ABC):
             storage_backend=MemoryCacheBackend(
                 max_size=BASE_SEARCH_CONFIG["cache_max_size"]
             ),
-            cache_dir=cache_dir
+            cache_dir=cache_dir,
+            enable_vector_similarity=enable_vector_cache,
         )
         
         # 性能监控指标

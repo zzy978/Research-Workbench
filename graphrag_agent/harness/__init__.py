@@ -1,4 +1,4 @@
-"""Stable contracts shared by the MVP harness and persistence layers."""
+"""Persistent Harness domain contracts; runtime is imported from .runtime."""
 
 from .contracts import RunStatus, SourceMode, WorkflowMode
 

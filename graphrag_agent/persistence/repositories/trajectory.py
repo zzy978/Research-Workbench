@@ -25,16 +25,26 @@ class PlanTaskToolRepository:
 
     async def save_plan(self, *, run_id: str, plan_id: str, version: int, status: str, plan: dict[str, Any], tasks: list[dict[str, Any]], source_mode: str) -> PlanModel:
         now = utc_now_iso()
-        plan_model = PlanModel(plan_id=plan_id, run_id=run_id, version=version, status=status, plan_json=json_text(plan), created_at=now, updated_at=now)
-        task_models = [
-            TaskModel(task_id=item["task_id"], run_id=run_id, plan_id=plan_id, task_type=item["task_type"], source_mode=source_mode, status=item.get("status", "pending"), task_json=json_text(item), created_at=now, updated_at=now)
-            for item in tasks
-        ]
         async with self.database.transaction() as session:
-            session.add(plan_model)
-            await session.flush()
-            session.add_all(task_models)
-        return plan_model
+            plan_model = await session.get(PlanModel, plan_id)
+            if plan_model is None:
+                plan_model = PlanModel(plan_id=plan_id, run_id=run_id, version=version, status=status, plan_json=json_text(plan), created_at=now, updated_at=now)
+                session.add(plan_model)
+                await session.flush()
+            else:
+                plan_model.version = version
+                plan_model.status = status
+                plan_model.plan_json = json_text(plan)
+                plan_model.updated_at = now
+            for item in tasks:
+                task_model = await session.get(TaskModel, item["task_id"])
+                if task_model is None:
+                    session.add(TaskModel(task_id=item["task_id"], run_id=run_id, plan_id=plan_id, task_type=item["task_type"], source_mode=source_mode, status=item.get("status", "pending"), task_json=json_text(item), created_at=now, updated_at=now))
+                else:
+                    task_model.status = item.get("status", task_model.status)
+                    task_model.task_json = json_text(item)
+                    task_model.updated_at = now
+            return plan_model
 
     async def prepare_tool_call(self, *, tool_call_id: str, run_id: str, task_id: Optional[str], tool_name: str, source_mode: str, args: dict[str, Any]) -> tuple[ToolCallModel, bool]:
         async with self.database.transaction() as session:
@@ -50,6 +60,10 @@ class PlanTaskToolRepository:
         async with self.database.transaction() as session:
             outcome = await session.execute(update(ToolCallModel).where(ToolCallModel.tool_call_id == tool_call_id, ToolCallModel.status != "completed").values(**values))
             return outcome.rowcount == 1
+
+    async def get_tool_call(self, tool_call_id: str) -> Optional[ToolCallModel]:
+        async with self.database.sessions() as session:
+            return await session.get(ToolCallModel, tool_call_id)
 
 
 class CheckpointRepository:
@@ -121,7 +135,14 @@ class ArtifactRepository:
         self.database = database
 
     async def record(self, artifact: StoredArtifact, *, run_id: Optional[str] = None) -> ArtifactModel:
-        model = ArtifactModel(artifact_id=artifact.artifact_id, run_id=run_id, relative_path=artifact.relative_path, mime_type=artifact.mime_type, size_bytes=artifact.size_bytes, sha256=artifact.sha256, created_at=utc_now_iso())
         async with self.database.transaction() as session:
-            session.add(model)
-        return model
+            model = (await session.execute(select(ArtifactModel).where(ArtifactModel.relative_path == artifact.relative_path))).scalar_one_or_none()
+            if model is None:
+                model = ArtifactModel(artifact_id=artifact.artifact_id, run_id=run_id, relative_path=artifact.relative_path, mime_type=artifact.mime_type, size_bytes=artifact.size_bytes, sha256=artifact.sha256, created_at=utc_now_iso())
+                session.add(model)
+            else:
+                model.run_id = run_id
+                model.mime_type = artifact.mime_type
+                model.size_bytes = artifact.size_bytes
+                model.sha256 = artifact.sha256
+            return model

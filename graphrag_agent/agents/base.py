@@ -21,7 +21,7 @@ from graphrag_agent.config.settings import AGENT_SETTINGS
 class BaseAgent(ABC):
     """Agent 基类，定义通用功能和接口"""
     
-    def __init__(self, cache_dir="./cache", memory_only=False):
+    def __init__(self, cache_dir="./cache", memory_only=False, *, enable_vector_cache=None):
         """
         初始化搜索工具
         
@@ -50,7 +50,8 @@ class BaseAgent(ABC):
                 disk_max_size=2000
             ) if not memory_only else None,
             cache_dir=cache_dir,
-            memory_only=memory_only
+            memory_only=memory_only,
+            enable_vector_similarity=enable_vector_cache,
         )
         
         # 全局缓存（跨会话）
@@ -62,7 +63,8 @@ class BaseAgent(ABC):
                 disk_max_size=5000
             ) if not memory_only else None,
             cache_dir=f"{cache_dir}/global",
-            memory_only=memory_only
+            memory_only=memory_only,
+            enable_vector_similarity=enable_vector_cache,
         )
         
         self.performance_metrics = {}  # 性能指标收集

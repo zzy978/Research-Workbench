@@ -12,7 +12,7 @@ from backend.app.schemas import MessageCreate, RunCreate, RunEventCreate, Sessio
 from graphrag_agent.harness.errors import AppError, ErrorCode
 from graphrag_agent.harness.versioning import EVENT_SCHEMA_VERSION
 from graphrag_agent.persistence.database import Database
-from graphrag_agent.persistence.models import MessageModel, RunEventModel, RunModel, SessionModel
+from graphrag_agent.persistence.models import ContractCheckModel, MessageModel, RunEventModel, RunModel, SessionModel
 
 from .utils import json_text, new_id, utc_now_iso
 
@@ -85,6 +85,10 @@ class MessageRepository:
             session.add(model)
             return model, True
 
+    async def get(self, message_id: str) -> Optional[MessageModel]:
+        async with self.database.sessions() as session:
+            return await session.get(MessageModel, message_id)
+
     async def list_for_session(self, session_id: str, *, limit: int = 100, offset: int = 0) -> list[MessageModel]:
         async with self.database.sessions() as session:
             result = await session.execute(select(MessageModel).where(MessageModel.session_id == session_id).order_by(MessageModel.created_at).limit(max(1, min(limit, 500))).offset(max(0, offset)))
@@ -152,14 +156,65 @@ class RunRepository:
             result = await session.execute(select(RunModel).where(RunModel.session_id == session_id).order_by(RunModel.created_at.desc()).limit(max(1, min(limit, 200))).offset(max(0, offset)))
             return list(result.scalars())
 
-    async def update_status(self, run_id: str, *, status: str, current_stage: Optional[str] = None, error_code: Optional[str] = None, error_message: Optional[str] = None) -> bool:
-        """Persistence-only update; stage 3 StateMachine will own transition legality."""
+    async def update_status(self, run_id: str, *, status: str, current_stage: Optional[str] = None, error_code: Optional[str] = None, error_message: Optional[str] = None, usage: Optional[dict[str, Any]] = None) -> bool:
+        """Persist a non-completion transition; completed uses complete_verified()."""
+        if status == "completed":
+            raise ValueError("completed 只能由 complete_verified() 在 Contract 门禁后写入")
         values: dict[str, Any] = {"status": status, "updated_at": utc_now_iso(), "error_code": error_code, "error_message": error_message}
         if current_stage is not None:
             values["current_stage"] = current_stage
+        if usage is not None:
+            values["usage_json"] = json_text(usage)
+        if status == "context_building":
+            values["started_at"] = utc_now_iso()
+        if status in {"failed", "budget_exhausted", "cancelled"}:
+            values["completed_at"] = utc_now_iso()
         async with self.database.transaction() as session:
             result = await session.execute(update(RunModel).where(RunModel.run_id == run_id).values(**values))
             return result.rowcount == 1
+
+    async def complete_verified(self, run_id: str, *, assistant_content: str, usage: dict[str, Any]) -> tuple[MessageModel, bool]:
+        """Atomically enforce required checks, complete Run, and append one assistant message."""
+        async with self.database.transaction() as session:
+            run = await session.get(RunModel, run_id)
+            if run is None:
+                raise ValueError(f"Run 不存在: {run_id}")
+            checks = list((await session.execute(select(ContractCheckModel).where(ContractCheckModel.run_id == run_id, ContractCheckModel.required == 1))).scalars())
+            if not checks or any(check.passed != 1 for check in checks):
+                raise ValueError("required Completion Contract 未全部通过")
+            existing = (await session.execute(select(MessageModel).where(MessageModel.run_id == run_id, MessageModel.role == "assistant"))).scalar_one_or_none()
+            now = utc_now_iso()
+            run.status = "completed"
+            run.current_stage = "completed"
+            run.usage_json = json_text(usage)
+            run.completed_at = now
+            run.updated_at = now
+            if existing is not None:
+                return existing, False
+            message = MessageModel(
+                message_id=new_id("msg"), session_id=run.session_id, run_id=run_id,
+                client_message_id=None, role="assistant", content=assistant_content,
+                metadata_json=json_text({"verified": True}), created_at=now,
+            )
+            session.add(message)
+            await session.flush()
+            return message, True
+
+    async def list_recoverable(self) -> list[RunModel]:
+        async with self.database.sessions() as session:
+            return list((await session.execute(select(RunModel).where(RunModel.status.in_(self.ACTIVE_STATUSES + ("interrupted",))))).scalars())
+
+    async def mark_expired_leases_interrupted(self) -> list[str]:
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        async with self.database.transaction() as session:
+            rows = list((await session.execute(select(RunModel).where(RunModel.status.in_(self.ACTIVE_STATUSES), RunModel.lease_expires_at.is_not(None), RunModel.lease_expires_at < now))).scalars())
+            for run in rows:
+                run.status = "interrupted"
+                run.current_stage = "interrupted"
+                run.lease_owner = None
+                run.lease_expires_at = None
+                run.updated_at = now
+            return [run.run_id for run in rows]
 
     async def request_cancel(self, run_id: str) -> bool:
         async with self.database.transaction() as session:
