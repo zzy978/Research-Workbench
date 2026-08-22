@@ -15,6 +15,7 @@ from deepresearch_agent.harness.event_bus import EventBus
 from deepresearch_agent.harness.recovery import classify_exception, classify_verification_failures
 from deepresearch_agent.harness.run_context import RunContext
 from deepresearch_agent.harness.state_machine import StateMachine
+from deepresearch_agent.models.prefix_cache import set_current_run
 from deepresearch_agent.persistence.artifact_store import ArtifactStore
 from deepresearch_agent.persistence.repositories import (
     ArtifactRepository, CheckpointRepository, ContractRepository, EventRepository,
@@ -46,6 +47,7 @@ class HarnessRuntime:
         context_builder: Any | None = None,
         memory_extractor: Any | None = None,
         skill_distiller: Any | None = None,
+        prefix_tracker: Any | None = None,
         lease_seconds: int = 90,
     ):
         self.runs = run_repository
@@ -62,18 +64,38 @@ class HarnessRuntime:
         self.context_builder = context_builder
         self.memory_extractor = memory_extractor
         self.skill_distiller = skill_distiller
+        self.prefix_tracker = prefix_tracker
         self.state_machine = StateMachine()
         self.lease_seconds = lease_seconds
+
+    def _attach_prefix_usage(self, context: RunContext) -> None:
+        """把当前 Run 的前缀缓存用量回填到 budget usage（幂等，可重复调用）。"""
+        if self.prefix_tracker is None:
+            return
+        snapshot = self.prefix_tracker.run_snapshot(context.run_id)
+        if not snapshot:
+            return
+        totals = snapshot.get("totals") or {}
+        context.budget_usage.prefix_cache_requests = int(totals.get("requests", 0))
+        context.budget_usage.prefix_cache_hit_tokens = int(totals.get("hit_tokens", 0))
+        context.budget_usage.prefix_cache_miss_tokens = int(totals.get("miss_tokens", 0))
+        reported_tokens = int(totals.get("input_tokens", 0)) + int(totals.get("output_tokens", 0))
+        context.budget_usage.llm_tokens = max(context.budget_usage.llm_tokens, reported_tokens)
 
     async def execute_run(self, run_id: str) -> RunContext:
         owner = f"harness-{uuid.uuid4().hex}"
         if not await self.runs.acquire_lease(run_id, owner, ttl_seconds=self.lease_seconds):
             raise RuntimeError(f"Run {run_id} 已由其他 Runtime 执行")
         context: RunContext | None = None
+        recovery_target: RunStatus | None = None
+        set_current_run(run_id)
         try:
             context = await self._load_context(run_id)
             if context.status is RunStatus.INTERRUPTED:
-                await self._transition(context, RunStatus.QUEUED, event_type="run.resumed")
+                resume_target = context.resume_from_status or RunStatus.QUEUED
+                context.resume_from_status = None
+                await self._transition(context, resume_target, event_type="run.resumed")
+                recovery_target = resume_target
             if context.status in {RunStatus.QUEUED, RunStatus.CONTEXT_BUILDING}:
                 if context.status is RunStatus.QUEUED:
                     await self._transition(context, RunStatus.CONTEXT_BUILDING, event_type="run.started")
@@ -99,6 +121,17 @@ class HarnessRuntime:
                 await self.events.publish(run_id, "context.completed", stage="context_building", payload={"query_resolved": True, "used_message_ids": context.used_message_ids, "semantic_memory_count": len(context.context_snapshot.get("semantic_memories", []))})
                 await self._transition(context, RunStatus.PLANNING)
             budget = BudgetManager(context.budget_limits, context.budget_usage)
+            # A checkpoint and its relational side effects are normally written
+            # in order, but a process can stop between those commits. Replaying
+            # these idempotent persistence steps reconstructs missing rows from
+            # the driver snapshot without repeating an external tool/LLM call.
+            if recovery_target in {RunStatus.EXECUTING, RunStatus.REPORTING, RunStatus.VERIFYING}:
+                await self._persist_plan(context, driver)
+            if recovery_target in {RunStatus.REPORTING, RunStatus.VERIFYING}:
+                await self._persist_execution(context, driver, budget)
+                context.budget_usage = budget.usage
+            if recovery_target is RunStatus.VERIFYING:
+                await self._save_report_artifact(context)
 
             while not self.state_machine.is_terminal(context.status):
                 await self._assert_not_cancelled(context)
@@ -109,12 +142,12 @@ class HarnessRuntime:
                     await driver.plan(failures or None)
                     context.plan_version += 1
                     context.workflow_state = driver.snapshot()
-                    await self._persist_plan(context, driver)
-                    await self.checkpoints.save(context, context.status.value)
                     plan_extra: dict[str, Any] = {}
                     plan_record = driver.plan_record()
                     if plan_record is not None:
                         _, plan_tasks = plan_record
+                        budget.observe_plan_tasks(len(plan_tasks))
+                        context.budget_usage = budget.usage
                         plan_extra = {
                             "task_count": len(plan_tasks),
                             "tasks": [
@@ -122,6 +155,8 @@ class HarnessRuntime:
                                 for t in plan_tasks
                             ],
                         }
+                    await self._persist_plan(context, driver)
+                    await self.checkpoints.save(context, context.status.value)
                     await self.events.publish(run_id, "plan.revised" if failures else "plan.created", stage=context.status.value, payload={"plan_version": context.plan_version, **plan_extra})
                     await self._transition(context, RunStatus.EXECUTING)
 
@@ -172,6 +207,7 @@ class HarnessRuntime:
                         self.state_machine.validate(context.status, RunStatus.COMPLETED, contract_passed=True)
                         context.status = RunStatus.COMPLETED
                         context.budget_usage = budget.usage
+                        self._attach_prefix_usage(context)
                         await self.runs.complete_verified(run_id, assistant_content=context.report or "", usage=budget.snapshot())
                         await self.checkpoints.save(context, "completed")
                         await self.events.publish(run_id, "run.completed", stage="completed", payload={"verified": True})
@@ -225,6 +261,7 @@ class HarnessRuntime:
                 await self.checkpoints.save(context, context.status.value)
             return context if context is not None else await self._load_context(run_id)
         finally:
+            set_current_run(None)
             await self.runs.release_lease(run_id, owner)
 
     async def _load_context(self, run_id: str) -> RunContext:
@@ -233,7 +270,12 @@ class HarnessRuntime:
             raise ValueError(f"Run 不存在: {run_id}")
         restored = await self.checkpoints.restore(run_id)
         if restored is not None:
-            restored.status = RunStatus(run.status)
+            persisted_status = RunStatus(run.status)
+            if persisted_status is RunStatus.INTERRUPTED:
+                restored.resume_from_status = self._safe_stage_after(restored.status)
+                restored.status = RunStatus.INTERRUPTED
+            else:
+                restored.status = persisted_status
             restored.cancellation_requested = bool(run.cancellation_requested)
             restored.config_snapshot.update(json.loads(run.config_snapshot_json or "{}"))
             return restored
@@ -250,9 +292,23 @@ class HarnessRuntime:
             budget_limits=BudgetLimits.model_validate(limits),
         )
 
+    @staticmethod
+    def _safe_stage_after(checkpoint_status: RunStatus) -> RunStatus:
+        """Return the first operation not committed by a stage-end checkpoint."""
+        return {
+            RunStatus.CONTEXT_BUILDING: RunStatus.PLANNING,
+            RunStatus.PLANNING: RunStatus.EXECUTING,
+            RunStatus.REPLANNING: RunStatus.EXECUTING,
+            RunStatus.EXECUTING: RunStatus.REPORTING,
+            RunStatus.RETRYING: RunStatus.EXECUTING,
+            RunStatus.REPORTING: RunStatus.VERIFYING,
+            RunStatus.VERIFYING: RunStatus.VERIFYING,
+        }.get(checkpoint_status, RunStatus.QUEUED)
+
     async def _transition(self, context: RunContext, target: RunStatus, *, event_type: str | None = None, error_code: str | None = None, error_message: str | None = None) -> None:
         self.state_machine.validate(context.status, target)
         context.status = target
+        self._attach_prefix_usage(context)
         await self.runs.update_status(context.run_id, status=target.value, current_stage=target.value, error_code=error_code, error_message=error_message, usage={"limits": context.budget_limits.model_dump(), "usage": context.budget_usage.model_dump()})
         await self.events.publish(context.run_id, event_type or "run.stage_changed", stage=target.value, payload={"status": target.value, "error_code": error_code})
 
@@ -274,7 +330,14 @@ class HarnessRuntime:
 
     async def _persist_execution(self, context: RunContext, driver: Any, budget: BudgetManager) -> None:
         seen_calls: set[str] = set()
-        for record in driver.execution_records():
+        records = driver.execution_records()
+        reported_tokens = sum(
+            self._token_usage_total(record.metadata.token_usage)
+            for record in records
+        )
+        if reported_tokens:
+            budget.observe_tokens(reported_tokens)
+        for record in records:
             await self.events.publish(context.run_id, "task.completed", stage="executing", payload={"task_id": record.task_id, "evidence_count": len(record.evidence)})
             for call in record.tool_calls:
                 if call.tool_call_id in seen_calls:
@@ -298,6 +361,25 @@ class HarnessRuntime:
             saved = await self.evidence_ledger.record_results(run_id=context.run_id, task_id=task_id, tool_call_id=tool_call_id, provider=str(provider), results=[result])
             for item in saved:
                 await self.events.publish(context.run_id, "evidence.added", stage="executing", payload={"task_id": task_id, "evidence_id": item.evidence_id, "source_mode": item.source_mode.value})
+
+    @staticmethod
+    def _token_usage_total(usage: dict[str, Any] | None) -> int:
+        """Normalize provider usage without double-counting a reported total."""
+        values = usage or {}
+        for key in ("total_tokens", "total", "tokens"):
+            if values.get(key) is not None:
+                return max(0, int(values[key]))
+        input_tokens = next(
+            (max(0, int(values[key])) for key in ("input_tokens", "prompt_tokens", "prompt", "input") if values.get(key) is not None),
+            0,
+        )
+        output_tokens = next(
+            (max(0, int(values[key])) for key in ("output_tokens", "completion_tokens", "completion", "output") if values.get(key) is not None),
+            0,
+        )
+        if input_tokens or output_tokens:
+            return input_tokens + output_tokens
+        return sum(max(0, int(value or 0)) for value in values.values())
 
     async def _save_report_artifact(self, context: RunContext) -> None:
         if self.artifact_store is None:

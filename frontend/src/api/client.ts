@@ -1,4 +1,4 @@
-import { ApiError, Capabilities, Evidence, Report, Run, Session, SessionDetail, SourceMode, WorkflowMode } from "../types/api";
+import { ApiError, CacheStats, Capabilities, Evidence, Report, Run, Session, SessionDetail, SourceMode, WorkflowMode } from "../types/api";
 
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api/v1").replace(/\/$/, "");
 
@@ -15,6 +15,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   capabilities: () => request<Capabilities>("/capabilities"),
   health: () => request<{status: string; components: Record<string, {status: string; configured?: boolean}>}>("/health"),
+  cacheStats: () => request<CacheStats>("/cache/stats"),
   sessions: () => request<{items: Session[]; total: number}>("/sessions?include_archived=true"),
   session: (id: string) => request<SessionDetail>(`/sessions/${id}`),
   createSession: (title = "新对话") => request<Session>("/sessions", { method: "POST", body: JSON.stringify({ title }) }),

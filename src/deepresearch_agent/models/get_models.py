@@ -2,6 +2,7 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_openai import ChatOpenAI
 from langchain.callbacks.streaming_aiter import AsyncIteratorCallbackHandler
 from langchain.callbacks.manager import AsyncCallbackManager
+from langchain_core.messages import AIMessageChunk
 
 
 import os
@@ -15,6 +16,7 @@ from deepresearch_agent.models.bailian_embeddings import (
     BailianOpenAIEmbeddings,
     is_bailian_compatible_url,
 )
+from deepresearch_agent.models.prefix_cache import extract_usage, tracker
 
 
 # 设置 tiktoken 缓存目录，避免每次联网拉取
@@ -32,9 +34,43 @@ def get_embeddings_model():
     return OpenAIEmbeddings(**config)
 
 
+class PrefixAwareChatOpenAI(ChatOpenAI):
+    """在 ChatOpenAI 基础上透传调用，并从响应 usage 中记录前缀缓存命中情况。
+
+    前缀缓存由服务端（OpenAI/DeepSeek/vLLM 等兼容网关）自动完成，本类不做任何
+    请求改写，只负责观测：把每次调用的 input/hit/miss token 记入全局与当前
+    Run 的累计器，供统计 API 与 Run usage 展示。
+    """
+
+    def _record_usage(self, response) -> None:
+        usage = extract_usage(response)
+        if usage is not None:
+            tracker.record(model=self.model_name or "", usage=usage)
+
+    def invoke(self, *args, **kwargs):
+        response = super().invoke(*args, **kwargs)
+        self._record_usage(response)
+        return response
+
+    async def ainvoke(self, *args, **kwargs):
+        response = await super().ainvoke(*args, **kwargs)
+        self._record_usage(response)
+        return response
+
+    async def astream(self, *args, **kwargs):
+        last_chunk = None
+        async for chunk in super().astream(*args, **kwargs):
+            if isinstance(chunk, AIMessageChunk):
+                last_chunk = chunk
+            yield chunk
+        # 流式响应的 usage 挂在最后一个 chunk 上（langchain-openai 会聚合）
+        if last_chunk is not None:
+            self._record_usage(last_chunk)
+
+
 def get_llm_model():
     config = {k: v for k, v in OPENAI_LLM_CONFIG.items() if v is not None and v != ""}
-    return ChatOpenAI(**config)
+    return PrefixAwareChatOpenAI(**config)
 
 def get_stream_llm_model():
     callback_handler = AsyncIteratorCallbackHandler()
@@ -43,7 +79,7 @@ def get_stream_llm_model():
 
     config = {k: v for k, v in OPENAI_LLM_CONFIG.items() if v is not None and v != ""}
     config.update({"streaming": True, "callbacks": manager})
-    return ChatOpenAI(**config)
+    return PrefixAwareChatOpenAI(**config)
 
 def count_tokens(text):
     """简单通用的token计数"""

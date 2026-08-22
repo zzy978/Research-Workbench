@@ -5,17 +5,9 @@ Reporter层Prompt模板集合
 """
 
 # 功能: 根据PlanSpec和ExecutionRecord生成报告纲要
-OUTLINE_PROMPT = '''你是一个报告规划助手。你需要根据用户查询、执行计划和收集的证据，生成一份结构清晰的报告纲要。
+OUTLINE_SYSTEM_PROMPT = '''你是一个报告规划助手。你需要根据用户查询、执行计划和收集的证据，生成一份结构清晰的报告纲要。
 
-**用户查询**: {query}
-
-**任务执行概要**:
-{plan_summary}
-
-**收集的证据** (共{evidence_count}条，格式示例：`result_id | granularity | source | 摘要`):
-{evidence_summary}
-
-**报告类型**: {report_type}
+**报告类型**:
 - **short_answer**: 简洁的问答式回复（1-3段，200-500字）
 - **long_document**: 结构化长文档（多章节，1000-5000字）
 
@@ -119,20 +111,21 @@ OUTLINE_PROMPT = '''你是一个报告规划助手。你需要根据用户查询
 '''
 
 
+# 变量部分（查询/概要/证据/报告类型）放在 HumanMessage，系统侧保持全静态
+OUTLINE_PROMPT = '''**用户查询**: {query}
+
+**任务执行概要**:
+{plan_summary}
+
+**收集的证据** (共{evidence_count}条，格式示例：`result_id | granularity | source | 摘要`):
+{evidence_summary}
+
+**报告类型**: {report_type}
+'''
+
+
 # 功能: 逐章节写作，生成带引用的段落内容
-SECTION_WRITE_PROMPT = '''你是一个专业的技术写作助手。你需要根据纲要和证据，撰写报告的一个章节。
-
-**报告整体纲要**:
-{outline}
-
-**当前章节**:
-- 章节ID: {section_id}
-- 章节标题: {section_title}
-- 章节摘要: {section_summary}
-- 预估字数: {estimated_words}
-
-**可用证据**:
-{evidence_list}
+SECTION_WRITE_SYSTEM_PROMPT = '''你是一个专业的技术写作助手。你需要根据纲要和证据，撰写报告的一个章节。
 
 **写作要求**:
 1. **结构清晰**: 每个段落一个中心论点
@@ -159,6 +152,21 @@ SECTION_WRITE_PROMPT = '''你是一个专业的技术写作助手。你需要根
 ---
 
 现在请根据以上信息撰写当前章节，使用Markdown格式输出：
+'''
+
+
+# 变量部分（纲要/章节信息/证据列表）放在 HumanMessage，系统侧保持全静态
+SECTION_WRITE_PROMPT = '''**报告整体纲要**:
+{outline}
+
+**当前章节**:
+- 章节ID: {section_id}
+- 章节标题: {section_title}
+- 章节摘要: {section_summary}
+- 预估字数: {estimated_words}
+
+**可用证据**:
+{evidence_list}
 '''
 
 
@@ -315,8 +323,21 @@ EVIDENCE_MAP_PROMPT = """
 """.strip()
 
 
+SECTION_REDUCE_SYSTEM_PROMPT = """
+你是一个技术写作专家。请基于证据摘要撰写章节内容。
+
+**写作要求**:
+1. 整合所有关键论点，去除冗余
+2. 保持逻辑连贯，使用过渡句
+3. 引用格式：[证据ID]
+4. 字数控制在实际给出的预估字数 ± 20% 范围内
+
+输出Markdown格式的章节内容，不要使用代码块。
+""".strip()
+
+
 SECTION_REDUCE_PROMPT = """
-你是一个技术写作专家。请基于以下证据摘要，撰写章节「{section_title}」的内容。
+请撰写章节「{section_title}」的内容。
 
 **章节要求**:
 - 目标: {section_goal}
@@ -324,14 +345,6 @@ SECTION_REDUCE_PROMPT = """
 
 **证据摘要**（已经过预处理）:
 {evidence_summaries}
-
-**写作要求**:
-1. 整合所有关键论点，去除冗余
-2. 保持逻辑连贯，使用过渡句
-3. 引用格式：[证据ID]
-4. 字数控制在 {estimated_words} ± 20% 范围内
-
-输出Markdown格式的章节内容，不要使用代码块。
 """.strip()
 
 

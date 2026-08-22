@@ -304,6 +304,10 @@ button { cursor: pointer; }
 
 /* ---------- 头部动作 ---------- */
 .chat-header-actions { display: flex; align-items: center; gap: 10px; }
+.cache-stats { font-size: 10px; font-family: var(--font-mono); color: var(--text-tertiary); background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 999px; padding: 5px 11px; white-space: nowrap; }
+.cache-stats b { font-weight: 600; }
+.cache-pct { font-family: var(--font-mono); font-weight: 600; color: var(--text-faint); }
+.cache-pct.is-good { color: var(--success); }
 .connection-dot { color: var(--text-tertiary); font-size: 11px; font-family: var(--font-mono); display: flex; align-items: center; gap: 6px; }
 .connection-dot::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
 .connection-dot.reconnecting { color: var(--warning); }

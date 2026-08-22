@@ -8,9 +8,9 @@ import logging
 
 from pydantic import BaseModel, Field
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-from deepresearch_agent.config.prompts import OUTLINE_PROMPT
+from deepresearch_agent.config.prompts import OUTLINE_PROMPT, OUTLINE_SYSTEM_PROMPT
 from deepresearch_agent.config.settings import (
     LLM_MAX_TOKENS,
     OPENAI_BASE_URL,
@@ -84,10 +84,18 @@ class OutlineBuilder:
         return outline
 
     def _invoke_llm(self, prompt: str) -> str:
-        """调用LLM生成大纲，并对百炼 Qwen 的空输出做一次有界重试。"""
+        """调用LLM生成大纲，并对百炼 Qwen 的空输出做一次有界重试。
+
+        SystemMessage 保持全静态，变量内容全部在 HumanMessage 中，
+        服务端前缀缓存（prefix cache）可以跨轮次复用 system 前缀。
+        """
         invocation_kwargs = self._structured_invocation_kwargs()
+        messages: List[BaseMessage] = [
+            SystemMessage(content=OUTLINE_SYSTEM_PROMPT),
+            HumanMessage(content=prompt),
+        ]
         message: BaseMessage = self._llm.invoke(  # type: ignore[assignment]
-            prompt,
+            messages,
             **invocation_kwargs,
         )
         content = self._message_content(message)
@@ -105,8 +113,12 @@ class OutlineBuilder:
                 _OUTLINE_RETRY_MAX_TOKENS,
                 LLM_MAX_TOKENS or 0,
             )
+        retry_messages: List[BaseMessage] = [
+            SystemMessage(content=OUTLINE_SYSTEM_PROMPT),
+            HumanMessage(content=prompt + _OUTLINE_RETRY_INSTRUCTION),
+        ]
         retry_message: BaseMessage = self._llm.invoke(  # type: ignore[assignment]
-            prompt + _OUTLINE_RETRY_INSTRUCTION,
+            retry_messages,
             **retry_kwargs,
         )
         retry_content = self._message_content(retry_message)

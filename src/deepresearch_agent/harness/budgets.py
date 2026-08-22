@@ -27,12 +27,17 @@ class BudgetLimits(BaseModel):
 
 
 class BudgetUsage(BaseModel):
+    plan_tasks: int = 0
     tool_calls: int = 0
     tavily_calls: int = 0
     replans: int = 0
     task_retries: int = 0
     llm_tokens: int = 0
     elapsed_seconds: float = 0.0
+    # 前缀缓存观测（由 PrefixCacheTracker 在 Run 结束时回填）
+    prefix_cache_requests: int = 0
+    prefix_cache_hit_tokens: int = 0
+    prefix_cache_miss_tokens: int = 0
 
 
 class BudgetManager:
@@ -49,6 +54,7 @@ class BudgetManager:
         elapsed = max(0.0, time.monotonic() - self._started)
         self.usage.elapsed_seconds = elapsed
         self._check("wall_time_seconds", elapsed, self.limits.wall_time_seconds)
+        self._check("plan_tasks", self.usage.plan_tasks, self.limits.max_plan_tasks)
         self._check("llm_tokens", self.usage.llm_tokens, self.limits.max_llm_tokens)
         self._check("tool_calls", self.usage.tool_calls, self.limits.max_tool_calls)
         self._check("tavily_calls", self.usage.tavily_calls, self.limits.max_tavily_calls)
@@ -66,6 +72,15 @@ class BudgetManager:
             self.usage.tavily_calls += count
         self.assert_available()
 
+    def observe_plan_tasks(self, count: int) -> None:
+        self.usage.plan_tasks = max(0, count)
+        self.assert_available()
+
+    def observe_tokens(self, count: int) -> None:
+        """Record an idempotent cumulative token total reported by a workflow."""
+        self.usage.llm_tokens = max(self.usage.llm_tokens, max(0, count))
+        self.assert_available()
+
     def consume_tokens(self, count: int) -> None:
         self.usage.llm_tokens += max(0, count)
         self.assert_available()
@@ -77,4 +92,3 @@ class BudgetManager:
     def consume_replan(self) -> None:
         self.usage.replans += 1
         self.assert_available()
-

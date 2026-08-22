@@ -240,13 +240,27 @@ class RunRepository:
     async def mark_expired_leases_interrupted(self) -> list[str]:
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         async with self.database.transaction() as session:
-            rows = list((await session.execute(select(RunModel).where(RunModel.status.in_(self.ACTIVE_STATUSES), RunModel.lease_expires_at.is_not(None), RunModel.lease_expires_at < now))).scalars())
+            rows = list((await session.execute(select(RunModel).where(
+                RunModel.status.in_(self.ACTIVE_STATUSES),
+                or_(RunModel.lease_expires_at.is_(None), RunModel.lease_expires_at < now),
+            ))).scalars())
             for run in rows:
                 run.status = "interrupted"
                 run.current_stage = "interrupted"
                 run.lease_owner = None
                 run.lease_expires_at = None
                 run.updated_at = now
+                session.add(RunEventModel(
+                    run_id=run.run_id,
+                    event_type="run.interrupted",
+                    stage="interrupted",
+                    payload_json=json_text({
+                        "reason": "startup_recovery",
+                        "schema_version": EVENT_SCHEMA_VERSION,
+                    }),
+                    schema_version=EVENT_SCHEMA_VERSION,
+                    created_at=now,
+                ))
             return [run.run_id for run in rows]
 
     async def request_cancel(self, run_id: str) -> bool:
@@ -264,8 +278,12 @@ class RunRepository:
                 entries = list(snapshot.get("clarifications", []))
                 entries.append({"content": clarification, "created_at": utc_now_iso()})
                 snapshot["clarifications"] = entries
-            run.status = "queued"
-            run.current_stage = "queued"
+            # Interrupted Runs keep their marker until Harness loads the latest
+            # checkpoint and selects the safe continuation stage. Clarification
+            # resumes intentionally rebuild context from queued.
+            if run.status == "needs_user_input":
+                run.status = "queued"
+                run.current_stage = "queued"
             run.cancellation_requested = 0
             run.error_code = None
             run.error_message = None

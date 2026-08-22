@@ -21,6 +21,20 @@ const ERROR_STATUS = ["failed", "budget_exhausted", "cancelled", "interrupted"];
 /** 终态/回退阶段（本身不是画板卡片，需回溯到最后一个真实阶段） */
 const NON_CARD_STAGES = ["failed", "cancelled", "budget_exhausted", "interrupted", "retrying", "replanning"];
 
+/** 千/百万位缩写，用于 token 计数展示 */
+function formatTokens(value: number | undefined): string {
+  const n = value ?? 0;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
+/** 命中率百分比（无观测时返回 null，不展示） */
+function cacheHitRate(hit: number | undefined, miss: number | undefined): number | null {
+  const total = (hit ?? 0) + (miss ?? 0);
+  return total > 0 ? Math.round((100 * (hit ?? 0)) / total) : null;
+}
+
 function stageStateOf(id: string, currentStage: string | null | undefined, status: string | undefined): StageState {
   if (!status) return "pending";
   if (status === "completed") return "done";
@@ -51,6 +65,7 @@ function ExecCard({ feed, run }: {feed: StageFeed; run: Run | null}) {
   const usage = run?.usage?.usage;
   const limits = run?.usage?.limits;
   const toolPct = usage?.tool_calls && limits?.max_tool_calls ? Math.min(100, Math.round((usage.tool_calls / limits.max_tool_calls) * 100)) : 0;
+  const cachePct = cacheHitRate(usage?.prefix_cache_hit_tokens, usage?.prefix_cache_miss_tokens);
 
   return <div className="exec-card">
     <div className="iter-rows" ref={listRef}>
@@ -68,6 +83,13 @@ function ExecCard({ feed, run }: {feed: StageFeed; run: Run | null}) {
         <span>工具调用</span>
         <span className="budget-fill-track"><i className="budget-fill" style={{ width: `${toolPct}%` }} /></span>
         <span className="budget-num">{usage.tool_calls} / {limits.max_tool_calls}</span>
+      </div>
+    )}
+    {cachePct != null && (
+      <div className="budget-row compact">
+        <span>前缀缓存</span>
+        <span className={`cache-pct${cachePct >= 50 ? " is-good" : ""}`}>{cachePct}%</span>
+        <span className="budget-num">命中 {formatTokens(usage?.prefix_cache_hit_tokens)} · 未命中 {formatTokens(usage?.prefix_cache_miss_tokens)} · {usage?.prefix_cache_requests} 次请求</span>
       </div>
     )}
   </div>;
@@ -99,6 +121,7 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
   const { events, run, connection, refresh } = useRunEvents(runId);
   const evidence = useQuery({ queryKey: ["evidence", runId], queryFn: () => api.evidence(runId!), enabled: Boolean(runId), refetchInterval: run && !TERMINAL.includes(run.status) ? RUN_POLL_MS : false });
   const report = useQuery({ queryKey: ["report", runId], queryFn: () => api.report(runId!), enabled: Boolean(runId), refetchInterval: run && !TERMINAL.includes(run.status) ? RUN_POLL_MS : false });
+  const cacheStats = useQuery({ queryKey: ["cacheStats"], queryFn: api.cacheStats, refetchInterval: 5000 });
 
   useEffect(() => { localStorage.setItem("source_mode", source); }, [source]);
   useEffect(() => { localStorage.setItem("chat.stripCollapsed", stripCollapsed ? "1" : "0"); }, [stripCollapsed]);
@@ -178,6 +201,12 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
     <header className="chat-header">
       <div><span className="eyebrow">PERSISTENT RESEARCH SESSION</span><h1>{detail.data?.title ?? "加载中…"}</h1></div>
       <div className="chat-header-actions">
+        {cacheStats.data && cacheStats.data.totals.requests > 0 && (
+          <span className="cache-stats" title="进程级前缀缓存累计（服务端自动命中，跨 Run 共享）">
+            前缀缓存 <b className={`cache-pct${cacheStats.data.hit_rate >= 0.5 ? " is-good" : ""}`}>{(cacheStats.data.hit_rate * 100).toFixed(1)}%</b>
+            {" · "}命中 {formatTokens(cacheStats.data.totals.hit_tokens)} / 未命中 {formatTokens(cacheStats.data.totals.miss_tokens)} · {cacheStats.data.totals.requests} 次
+          </span>
+        )}
         <span className={`connection-dot${connection === "reconnecting" ? " reconnecting" : ""}`}>{connection === "reconnecting" ? "重连中" : "实时"}</span>
         <button type="button" className="icon-btn" onClick={() => setStripCollapsed((value) => !value)} title={stripCollapsed ? "展开会话消息" : "折叠会话消息"} aria-label="会话消息">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>

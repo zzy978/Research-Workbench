@@ -2,7 +2,7 @@
 name: research-web-1123cbd3
 description: 复用已验证的web研究轨迹，完成问题拆解、同源检索、引用报告和完成验证。
 version: 0.1.0
-status: candidate
+status: active
 source_modes:
 - web
 created_from_runs:

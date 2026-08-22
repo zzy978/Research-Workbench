@@ -63,6 +63,7 @@ cp .env.example .env
 | `NEO4J_URI` / `NEO4J_USERNAME` / `NEO4J_PASSWORD` | **私有库模式必填**，Neo4j 连接 |
 | `APP_DATABASE_URL` | SQLite 路径，默认 `./data/app.db` |
 | `APP_PORT` / `FRONTEND_ORIGINS` | 服务端口与 CORS 白名单 |
+| `FRONTEND_PORT` | Docker 前端宿主端口，默认 `5173`；端口冲突时可改为 `5174` |
 
 完整配置项及说明见 `.env.example` 注释（Harness 预算、检索参数、多智能体编排、缓存、图谱构建等均有覆盖）。
 
@@ -82,6 +83,25 @@ cd ..
 
 ```bash
 docker compose up -d neo4j
+```
+
+如需用 Docker 启动完整应用：
+
+```powershell
+docker compose up -d --build
+```
+
+若提示 `127.0.0.1:5173` 已被占用，可先停止此前由本地脚本启动的前端，或为本次 Compose 改用其他端口：
+
+```powershell
+# 方案一：停止 scripts/start-local.ps1 启动的本地进程
+.\scripts\stop-local.ps1
+docker compose up -d
+
+# 方案二：保留已有进程，让 Docker 前端使用 5174
+$env:FRONTEND_PORT = "5174"
+docker compose up -d
+# 浏览器访问 http://127.0.0.1:5174
 ```
 
 ### 5. 初始化数据库并启动后端
@@ -113,6 +133,8 @@ npm run dev
 
 浏览器访问 `http://127.0.0.1:5173`，创建会话 → 选择信息源（私有库 / 联网搜索）→ 发送消息，即可观察实时研究进度与最终报告。
 
+若运行结束显示 `BUDGET_EXHAUSTED: ... llm_tokens=...`，表示本轮 prompt + completion 确实达到 `RUN_MAX_LLM_TOKENS`。先重新构建后端，再按机器资源提高 `.env` 中的值，例如 `RUN_MAX_LLM_TOKENS=200000`；不要把已完成的 Run 直接标记为成功。
+
 ### Windows 一键启动
 
 ```powershell
@@ -120,10 +142,12 @@ npm run dev
 .\scripts\stop-local.ps1           # 停止本地进程
 ```
 
+该脚本也会识别没有 PID 文件的本项目 Vite 进程；如果 5173 仍被其他程序占用，使用 `netstat -ano | findstr :5173` 检查其 PID。
+
 ### 运行测试
 
 ```bash
-python -m pytest -q                # 后端离线门禁（当前 70 passed）
+python -m pytest -q                # 后端离线门禁（当前 101 passed）
 cd frontend && npm run build       # 前端类型检查 + 生产构建
 ```
 

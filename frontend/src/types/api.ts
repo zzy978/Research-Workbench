@@ -16,8 +16,11 @@ export interface RunUsage {
   usage?: {
     tool_calls?: number; tavily_calls?: number; replans?: number; task_retries?: number;
     llm_tokens?: number; elapsed_seconds?: number;
+    prefix_cache_requests?: number; prefix_cache_hit_tokens?: number; prefix_cache_miss_tokens?: number;
   };
 }
+export interface CacheTotals { requests: number; input_tokens: number; hit_tokens: number; miss_tokens: number; output_tokens: number; }
+export interface CacheStats { totals: CacheTotals; per_model: Record<string, CacheTotals>; started_at: number; hit_rate: number; }
 export interface SessionDetail extends Session { messages: Message[]; runs: Run[]; }
 export interface Evidence {
   evidence_id: string; source_mode: SourceMode; provider: string; source_id: string; title?: string | null;

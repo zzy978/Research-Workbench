@@ -19,6 +19,8 @@ def test_compose_packages_three_loopback_services_and_persistent_data():
     backend_volumes = set(compose["services"]["backend"]["volumes"])
     assert {"./data:/app/data", "./skills:/app/skills", "./files:/app/files", "./cache:/app/cache"}.issubset(backend_volumes)
     assert compose["services"]["backend"]["environment"]["FASTAPI_WORKERS"] == "1"
+    assert compose["services"]["frontend"]["ports"] == ["127.0.0.1:${FRONTEND_PORT:-5173}:80"]
+    assert "${FRONTEND_PORT:-5173}" in compose["services"]["backend"]["environment"]["FRONTEND_ORIGINS"]
 
 
 def test_delivery_files_and_configuration_are_complete():
@@ -30,7 +32,7 @@ def test_delivery_files_and_configuration_are_complete():
     ]
     assert all((ROOT / item).is_file() for item in required)
     env = (ROOT / ".env.example").read_text(encoding="utf-8")
-    for name in ("APP_DATABASE_URL", "ARTIFACT_ROOT", "SKILLS_ROOT", "TAVILY_API_KEY", "FASTAPI_WORKERS", "CONTEXT_MAX_CHARS", "RUN_MAX_TOOL_CALLS"):
+    for name in ("APP_DATABASE_URL", "ARTIFACT_ROOT", "SKILLS_ROOT", "TAVILY_API_KEY", "FASTAPI_WORKERS", "FRONTEND_PORT", "CONTEXT_MAX_CHARS", "RUN_MAX_TOOL_CALLS"):
         assert re.search(rf"(?m)^{name}\s*=", env)
     assert not re.search(r"(?m)^(?:OPENAI_API_KEY|TAVILY_API_KEY)[ \t]*=[ \t]*\S+", env)
 

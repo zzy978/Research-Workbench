@@ -8,6 +8,7 @@ from typing import Any
 
 from deepresearch_agent.agents.deep_research_agent import DeepResearchAgent
 from deepresearch_agent.agents.multi_agent.integration.multi_agent_factory import MultiAgentFactory
+from deepresearch_agent.agents.multi_agent.executor.worker_coordinator import WorkerCoordinator
 from deepresearch_agent.config.settings import ARTIFACT_ROOT, AUTO_RESUME_RUNS
 from deepresearch_agent.harness.contracts import SourceMode, WorkflowMode
 from deepresearch_agent.harness.event_bus import EventBus
@@ -24,7 +25,9 @@ from deepresearch_agent.persistence.repositories import (
 from deepresearch_agent.memory import ContextBuilder, EpisodicMemory, MemoryExtractor, MemoryRetriever, MemoryService, SessionSummarizer
 from deepresearch_agent.config import settings
 from deepresearch_agent.evolution import SkillLoader, SkillRegistry, TrajectoryDistiller
+from deepresearch_agent.models.prefix_cache import tracker as prefix_tracker
 from deepresearch_agent.retrieval.router import create_default_router
+from deepresearch_agent.retrieval.base import TimeoutBoundProvider
 
 
 class RunService:
@@ -73,12 +76,19 @@ class RunService:
         def workflow_factory(context, events=None):
             if self._external_factory is not None:
                 return self._external_factory(context, events)
-            provider = self._router.for_mode(context.source_mode)
+            provider = TimeoutBoundProvider(
+                self._router.for_mode(context.source_mode),
+                timeout_seconds=context.budget_limits.tool_timeout_seconds,
+            )
             if context.workflow_mode is WorkflowMode.DEEP_RESEARCH:
                 agent = DeepResearchAgent(use_deeper_tool=True, retrieval_provider=provider, run_id=context.run_id)
                 agents.append(agent)
                 return DeepResearchDriver(context, agent, events=events)
-            bundle = MultiAgentFactory.create_default_bundle(retrieval_provider=provider)
+            worker = WorkerCoordinator(
+                retrieval_provider=provider,
+                max_parallel_workers=context.budget_limits.max_concurrency,
+            )
+            bundle = MultiAgentFactory.create_default_bundle(retrieval_provider=provider, worker=worker)
             return PlanExecuteReportDriver(context, bundle.orchestrator)
 
         runtime = HarnessRuntime(
@@ -89,6 +99,7 @@ class RunService:
             artifact_store=self.artifact_store, artifact_repository=ArtifactRepository(self.database),
             event_bus=self.event_bus,
             context_builder=self.context_builder, memory_extractor=self.memory_extractor, skill_distiller=self.skill_distiller,
+            prefix_tracker=prefix_tracker,
         )
         try:
             return await runtime.execute_run(run_id)

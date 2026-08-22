@@ -23,7 +23,10 @@ class StateMachine:
         RunStatus.VERIFYING: {RunStatus.COMPLETED, RunStatus.REPLANNING, RunStatus.REPORTING, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
         RunStatus.REPLANNING: {RunStatus.EXECUTING, RunStatus.NEEDS_USER_INPUT, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
         RunStatus.CANCELLING: {RunStatus.CANCELLED},
-        RunStatus.INTERRUPTED: {RunStatus.QUEUED, RunStatus.FAILED},
+        RunStatus.INTERRUPTED: {
+            RunStatus.QUEUED, RunStatus.PLANNING, RunStatus.EXECUTING,
+            RunStatus.REPORTING, RunStatus.VERIFYING, RunStatus.FAILED,
+        },
         RunStatus.NEEDS_USER_INPUT: {RunStatus.QUEUED, RunStatus.CANCELLING, RunStatus.FAILED},
     }
     terminal = frozenset({RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED, RunStatus.CANCELLED})
@@ -38,4 +41,3 @@ class StateMachine:
 
     def is_terminal(self, status: RunStatus | str) -> bool:
         return RunStatus(status) in self.terminal
-

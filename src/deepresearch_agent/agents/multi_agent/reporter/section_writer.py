@@ -11,9 +11,12 @@ import re
 
 from pydantic import BaseModel, Field
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-from deepresearch_agent.config.prompts import SECTION_WRITE_PROMPT
+from deepresearch_agent.config.prompts import (
+    SECTION_WRITE_PROMPT,
+    SECTION_WRITE_SYSTEM_PROMPT,
+)
 from deepresearch_agent.models.get_models import get_llm_model
 from deepresearch_agent.agents.multi_agent.core.retrieval_result import RetrievalResult
 from deepresearch_agent.agents.multi_agent.reporter.outline_builder import (
@@ -195,8 +198,16 @@ class SectionWriter:
         return joined[-self.config.max_previous_context_chars:]
 
     def _invoke_llm(self, prompt: str) -> str:
-        """调用LLM生成章节内容"""
-        message: BaseMessage = self._llm.invoke(prompt)  # type: ignore[assignment]
+        """调用LLM生成章节内容
+
+        SystemMessage 保持全静态，变量内容全部在 HumanMessage 中，
+        服务端前缀缓存（prefix cache）可以跨章节/跨轮次复用 system 前缀。
+        """
+        messages: List[BaseMessage] = [
+            SystemMessage(content=SECTION_WRITE_SYSTEM_PROMPT),
+            HumanMessage(content=prompt),
+        ]
+        message: BaseMessage = self._llm.invoke(messages)  # type: ignore[assignment]
         content = getattr(message, "content", None) or str(message)
         return content.strip()
 

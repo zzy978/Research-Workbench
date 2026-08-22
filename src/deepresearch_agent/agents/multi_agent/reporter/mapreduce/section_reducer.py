@@ -10,7 +10,7 @@ import logging
 import uuid
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from deepresearch_agent.agents.multi_agent.reporter.mapreduce.evidence_mapper import (
     EvidenceSummary,
@@ -18,6 +18,7 @@ from deepresearch_agent.agents.multi_agent.reporter.mapreduce.evidence_mapper im
 from deepresearch_agent.agents.multi_agent.reporter.outline_builder import SectionOutline
 from deepresearch_agent.config.prompts import (
     SECTION_REDUCE_PROMPT,
+    SECTION_REDUCE_SYSTEM_PROMPT,
     INTERMEDIATE_SUMMARY_PROMPT,
     MERGE_PROMPT,
     REFINE_PROMPT,
@@ -189,7 +190,14 @@ class SectionReducer:
             estimated_words=section_context.estimated_words,
             evidence_summaries=text,
         )
-        return self._invoke_llm(prompt)
+        # 最终归约是高频调用点：SystemMessage 保持全静态，便于服务端前缀缓存复用。
+        messages: List[BaseMessage] = [
+            SystemMessage(content=SECTION_REDUCE_SYSTEM_PROMPT),
+            HumanMessage(content=prompt),
+        ]
+        message: BaseMessage = self._llm.invoke(messages)  # type: ignore[assignment]
+        content = getattr(message, "content", None) or str(message)
+        return content.strip()
 
     def _generate_intermediate_summary(
         self,

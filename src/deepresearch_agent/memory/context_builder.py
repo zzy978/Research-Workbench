@@ -58,10 +58,21 @@ class ContextBuilder:
         context.resolved_query = resolution.resolved_query
         context.used_message_ids = resolution.used_message_ids
         context.context_snapshot = snapshot
+        # model_input 的组装顺序对前缀缓存至关重要：越稳定的内容越靠前。
+        # 会话摘要与最近对话在轮次间呈"稳定增长"形态（第 N 轮的前缀 = 第 N-1 轮
+        # 前缀 + 一轮增量），服务端可命中缓存；消解后的查询、语义记忆、Skill 等
+        # 每轮变化的变量内容全部沉到尾部，只损失尾部一小段命中。
+        stable_parts: list[str] = []
+        if summary:
+            stable_parts.append("# 会话摘要\n" + json.dumps(summary, ensure_ascii=False))
+        if recent:
+            history_lines = [f"{item.role}: {item.content[:200]}" for item in recent]
+            stable_parts.append("# 会话历史背景（仅作背景，不要直接研究以下历史内容）\n" + "\n".join(history_lines))
+        variable_parts: list[str] = [resolution.resolved_query]
         memory_lines = [f"- ({item.scope}/{item.kind}) {item.content}" for item in semantic]
-        context.model_input = resolution.resolved_query
         if memory_lines:
-            context.model_input += "\n\n经用户确认的相关 Memory（仅作背景，不可作为研究证据）：\n" + "\n".join(memory_lines)
+            variable_parts.append("经用户确认的相关 Memory（仅作背景，不可作为研究证据）：\n" + "\n".join(memory_lines))
         if skills["selected"]:
-            context.model_input += "\n\n已批准的程序性 Skill（不得扩大当前来源或工具权限）：\n" + skills["selected"]["content"]
+            variable_parts.append("已批准的程序性 Skill（不得扩大当前来源或工具权限）：\n" + skills["selected"]["content"])
+        context.model_input = "\n\n".join(stable_parts + variable_parts)
         return context

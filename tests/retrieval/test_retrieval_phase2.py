@@ -11,7 +11,7 @@ from deepresearch_agent.agents.multi_agent.executor.retrieval_executor import Re
 from deepresearch_agent.harness.contracts import SourceMode
 from deepresearch_agent.harness.errors import AppError, ErrorCode
 from deepresearch_agent.harness.policies import SourcePolicy
-from deepresearch_agent.retrieval.base import SearchFilters, ToolCallContext
+from deepresearch_agent.retrieval.base import SearchFilters, TimeoutBoundProvider, ToolCallContext
 from deepresearch_agent.retrieval.graphrag_provider import GraphRAGProvider
 from deepresearch_agent.retrieval.router import RetrievalRouter
 from deepresearch_agent.retrieval.tavily_provider import TavilyProvider
@@ -47,6 +47,29 @@ class FakeProvider:
 
 def _context(mode: SourceMode) -> ToolCallContext:
     return ToolCallContext(run_id="run_test", task_id="task_1", tool_call_id="call_1", source_mode=mode)
+
+
+@pytest.mark.asyncio
+async def test_run_timeout_wrapper_preserves_source_and_returns_typed_timeout(monkeypatch):
+    provider = FakeProvider(SourceMode.WEB)
+    bounded = TimeoutBoundProvider(provider, timeout_seconds=7)
+    observed = {}
+
+    async def force_timeout(awaitable, timeout):
+        observed["timeout"] = timeout
+        awaitable.close()
+        raise TimeoutError("forced")
+
+    monkeypatch.setattr(asyncio, "wait_for", force_timeout)
+    with pytest.raises(AppError) as caught:
+        await bounded.search(
+            "query", top_k=3, search_depth="basic",
+            filters=SearchFilters(), call_context=_context(SourceMode.WEB),
+        )
+    assert observed["timeout"] == 7
+    assert bounded.mode is SourceMode.WEB
+    assert caught.value.code is ErrorCode.RETRIEVAL_TIMEOUT
+    assert caught.value.retryable is True
 
 
 def test_router_strict_modes_and_missing_provider():
