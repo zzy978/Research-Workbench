@@ -20,6 +20,8 @@ class SessionRead(PersistenceDTO):
     title: str
     status: str
     summary_json: Optional[str] = None
+    memory_snapshot_version: Optional[int] = None
+    memory_snapshot_created_at: Optional[str] = None
     created_at: str
     updated_at: str
     archived_at: Optional[str] = None

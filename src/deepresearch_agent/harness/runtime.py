@@ -15,6 +15,7 @@ from deepresearch_agent.harness.event_bus import EventBus
 from deepresearch_agent.harness.recovery import classify_exception, classify_verification_failures
 from deepresearch_agent.harness.run_context import RunContext
 from deepresearch_agent.harness.state_machine import StateMachine
+from deepresearch_agent.context.artifact_edit import ArtifactEditContextBuilder
 from deepresearch_agent.models.prefix_cache import set_current_run
 from deepresearch_agent.persistence.artifact_store import ArtifactStore
 from deepresearch_agent.persistence.repositories import (
@@ -107,7 +108,11 @@ class HarnessRuntime:
                         "skill": None if not selected_skill else {"name": selected_skill.get("name"), "version": selected_skill.get("version")},
                         "context_policy": {
                             "recent_turns": len(context.context_snapshot.get("recent_messages", [])),
-                            "semantic_memory_ids": [item.get("memory_id") for item in context.context_snapshot.get("semantic_memories", [])],
+                            "memory_snapshot_version": context.context_snapshot.get("memory_snapshot_version", 0),
+                            "curated_memory_ids": [item.get("memory_id") for item in context.context_snapshot.get("curated_memory", [])],
+                            "historical_recall_session_ids": context.context_snapshot.get("used_session_ids", []),
+                            "stable_snapshot_id": context.context_snapshot.get("stable_snapshot_id"),
+                            "input_tokens": context.context_snapshot.get("total_input_tokens", 0),
                         },
                     })
                 else:
@@ -118,7 +123,16 @@ class HarnessRuntime:
             if context.status is RunStatus.CONTEXT_BUILDING:
                 context.workflow_state = driver.snapshot()
                 await self.checkpoints.save(context, "context_building")
-                await self.events.publish(run_id, "context.completed", stage="context_building", payload={"query_resolved": True, "used_message_ids": context.used_message_ids, "semantic_memory_count": len(context.context_snapshot.get("semantic_memories", []))})
+                await self.events.publish(run_id, "context.completed", stage="context_building", payload={
+                    "query_resolved": True,
+                    "used_message_ids": context.used_message_ids,
+                    "curated_memory_count": len(context.context_snapshot.get("curated_memory", [])),
+                    "memory_snapshot_version": context.context_snapshot.get("memory_snapshot_version", 0),
+                    "historical_recall_count": len(context.context_snapshot.get("historical_recall", [])),
+                    "historical_recall_searched": bool(context.context_snapshot.get("historical_recall_searched")),
+                    "context_tokens": context.context_snapshot.get("total_input_tokens", 0),
+                    "artifact_edit": bool(context.context_snapshot.get("artifact_edit")),
+                })
                 await self._transition(context, RunStatus.PLANNING)
             budget = BudgetManager(context.budget_limits, context.budget_usage)
             # A checkpoint and its relational side effects are normally written
@@ -183,7 +197,8 @@ class HarnessRuntime:
 
                 elif context.status is RunStatus.REPORTING:
                     await self._assert_not_cancelled(context)
-                    context.report = await driver.report()
+                    generated_report = await driver.report()
+                    context.report = self._apply_artifact_edit(context, generated_report)
                     await self._assert_not_cancelled(context)
                     context.workflow_state = driver.snapshot()
                     await self._save_report_artifact(context)
@@ -215,7 +230,13 @@ class HarnessRuntime:
                             try:
                                 candidates = await self.memory_extractor.extract_from_completed_run(run_id)
                                 for candidate in candidates:
-                                    await self.events.publish(run_id, "memory.candidate_created", stage="completed", payload={"memory_id": candidate.memory_id})
+                                    await self.events.publish(run_id, "memory.candidate_created", stage="completed", payload={
+                                        "memory_id": candidate.memory_id,
+                                        "target": candidate.target or candidate.scope,
+                                        "kind": candidate.kind,
+                                        "confidence": candidate.confidence,
+                                        "created_by": candidate.created_by,
+                                    })
                             except Exception as exc:
                                 await self.events.publish(run_id, "memory.extraction_failed", stage="completed", payload={"error": type(exc).__name__})
                         if self.skill_distiller is not None:
@@ -387,3 +408,12 @@ class HarnessRuntime:
         artifact = self.artifact_store.write_text(f"{context.run_id}/report/final.md", context.report or "", mime_type="text/markdown; charset=utf-8")
         if self.artifact_repository is not None:
             await self.artifact_repository.record(artifact, run_id=context.run_id)
+
+    def _apply_artifact_edit(self, context: RunContext, generated_report: str) -> str:
+        contract = context.context_snapshot.get("artifact_edit")
+        if not contract:
+            return generated_report
+        if self.artifact_store is None:
+            raise ValueError("Artifact edit requires an ArtifactStore")
+        base_report = self.artifact_store.read_bytes(contract["relative_path"]).decode("utf-8")
+        return ArtifactEditContextBuilder.apply_replacement(base_report, contract, generated_report)

@@ -29,6 +29,25 @@ class SessionRepository:
             session.add(model)
         return model
 
+    async def freeze_memory_snapshot(self, session_id: str, snapshot: dict[str, Any], version: int) -> Optional[SessionModel]:
+        """Persist the first curated-memory snapshot for a Session.
+
+        The conditional update is deliberate: memory writes made later in the
+        Session must not mutate its stable prompt prefix.
+        """
+        async with self.database.transaction() as session:
+            await session.execute(
+                update(SessionModel)
+                .where(SessionModel.session_id == session_id, SessionModel.memory_snapshot_json.is_(None))
+                .values(
+                    memory_snapshot_json=json_text(snapshot),
+                    memory_snapshot_version=version,
+                    memory_snapshot_created_at=utc_now_iso(),
+                    updated_at=utc_now_iso(),
+                )
+            )
+            return await session.get(SessionModel, session_id)
+
     async def get(self, session_id: str, *, include_deleted: bool = False) -> Optional[SessionModel]:
         async with self.database.sessions() as session:
             query = select(SessionModel).where(SessionModel.session_id == session_id)
@@ -132,7 +151,10 @@ class MessageRepository:
             ids = (await session.execute(text(f"SELECT message_id FROM messages_fts WHERE {clause} LIMIT :limit"), params)).scalars().all()
             if not ids:
                 return []
-            return list((await session.execute(select(MessageModel).where(MessageModel.message_id.in_(ids)))).scalars())
+            rows = list((await session.execute(select(MessageModel).where(MessageModel.message_id.in_(ids)))).scalars())
+            rank = {message_id: index for index, message_id in enumerate(ids)}
+            rows.sort(key=lambda item: rank.get(item.message_id, len(rank)))
+            return rows
 
 
 class RunRepository:

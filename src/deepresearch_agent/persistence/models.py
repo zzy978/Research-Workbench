@@ -14,6 +14,9 @@ class SessionModel(Base):
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     summary_json: Mapped[str | None] = mapped_column(Text)
+    memory_snapshot_json: Mapped[str | None] = mapped_column(Text)
+    memory_snapshot_version: Mapped[int | None] = mapped_column(Integer)
+    memory_snapshot_created_at: Mapped[str | None] = mapped_column(String(40))
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
     updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
     archived_at: Mapped[str | None] = mapped_column(String(40))
@@ -186,6 +189,7 @@ class MemoryModel(Base):
     __tablename__ = "memories"
     memory_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     session_id: Mapped[str | None] = mapped_column(ForeignKey("sessions.session_id"))
+    target: Mapped[str | None] = mapped_column(String(32))
     scope: Mapped[str] = mapped_column(String(32), nullable=False)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
@@ -199,6 +203,7 @@ class MemoryModel(Base):
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
     updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
     deleted_at: Mapped[str | None] = mapped_column(String(40))
+    archived_at: Mapped[str | None] = mapped_column(String(40))
     __table_args__ = (Index("ix_memories_status_scope_expiry", "status", "scope", "expires_at"),)
 
 

@@ -22,10 +22,13 @@ from deepresearch_agent.persistence.repositories import (
     SessionRepository, MemoryRepository, AuditRepository,
     SkillRepository,
 )
-from deepresearch_agent.memory import ContextBuilder, EpisodicMemory, MemoryExtractor, MemoryRetriever, MemoryService, SessionSummarizer
+from deepresearch_agent.context import ArtifactEditContextBuilder, ContextBuilder, ContextCompactor
+from deepresearch_agent.memory import MemoryExtractor, MemoryService
+from deepresearch_agent.sessions import SessionSearchService
 from deepresearch_agent.config import settings
 from deepresearch_agent.evolution import SkillLoader, SkillRegistry, TrajectoryDistiller
 from deepresearch_agent.models.prefix_cache import tracker as prefix_tracker
+from deepresearch_agent.models.get_models import get_llm_model
 from deepresearch_agent.retrieval.router import create_default_router
 from deepresearch_agent.retrieval.base import TimeoutBoundProvider
 
@@ -49,16 +52,57 @@ class RunService:
         self._router = None if workflow_factory else create_default_router()
         self._tasks: dict[str, asyncio.Task] = {}
         memory_repository = MemoryRepository(database)
-        memory_service = MemoryService(memory_repository, AuditRepository(database))
+        memory_service = MemoryService(
+            memory_repository, AuditRepository(database),
+            user_max_tokens=settings.MEMORY_USER_MAX_TOKENS,
+            project_max_tokens=settings.MEMORY_PROJECT_MAX_TOKENS,
+            user_max_chars=settings.MEMORY_USER_MAX_CHARS,
+            project_max_chars=settings.MEMORY_PROJECT_MAX_CHARS,
+        )
+        session_repository = SessionRepository(database)
+        artifact_repository = ArtifactRepository(database)
         self.skill_registry = SkillRegistry(skills_root, SkillRepository(database))
         skill_loader = SkillLoader(self.skill_registry)
         self.context_builder = ContextBuilder(
-            self.messages, EpisodicMemory(self.messages, self.runs),
-            MemoryRetriever(memory_repository, max_chars=settings.SEMANTIC_MEMORY_MAX_CHARS),
-            SessionSummarizer(SessionRepository(database), self.messages, threshold_messages=settings.SESSION_SUMMARY_THRESHOLD_MESSAGES),
-            skill_loader=skill_loader, max_chars=settings.CONTEXT_MAX_CHARS, recent_turns=settings.CONTEXT_RECENT_TURNS,
+            messages=self.messages, sessions=session_repository, memory_service=memory_service,
+            session_search=SessionSearchService(self.messages, session_repository),
+            compactor=ContextCompactor(
+                session_repository, self.messages,
+                threshold_tokens=min(
+                    settings.CONTEXT_COMPRESSION_THRESHOLD_TOKENS,
+                    max(100, int(settings.CONTEXT_MAX_TOKENS * settings.CONTEXT_COMPRESSION_THRESHOLD_RATIO)),
+                ),
+                protect_recent_messages=settings.CONTEXT_PROTECT_RECENT_MESSAGES,
+                target_tokens=settings.CONTEXT_COMPRESSION_TARGET_TOKENS,
+            ),
+            skill_loader=skill_loader,
+            artifact_context_builder=ArtifactEditContextBuilder(
+                self.runs, artifact_repository, self.artifact_store,
+            ),
+            max_tokens=settings.CONTEXT_MAX_TOKENS,
+            max_chars=settings.CONTEXT_MAX_CHARS,
+            recent_turns=settings.CONTEXT_RECENT_TURNS,
+            session_search_top_k=settings.SESSION_SEARCH_TOP_K,
+            session_search_window=settings.SESSION_SEARCH_WINDOW,
         )
-        self.memory_extractor = MemoryExtractor(memory_service, self.runs, self.messages, ContractRepository(database))
+        memory_llm = None
+        if (
+            settings.MEMORY_BACKGROUND_REVIEW_ENABLED
+            and workflow_factory is None
+            and settings.OPENAI_API_KEY
+            and settings.MEMORY_LLM_MODEL
+        ):
+            memory_llm = get_llm_model(
+                model=settings.MEMORY_LLM_MODEL, temperature=0.0,
+                max_tokens=settings.MEMORY_LLM_MAX_OUTPUT_TOKENS,
+            )
+        self.memory_extractor = None if memory_llm is None else MemoryExtractor(
+            memory_service, self.runs, self.messages, ContractRepository(database),
+            llm=memory_llm,
+            min_confidence=settings.MEMORY_LLM_MIN_CONFIDENCE,
+            max_candidates=settings.MEMORY_LLM_MAX_CANDIDATES,
+            max_message_chars=settings.MEMORY_LLM_MAX_MESSAGE_CHARS,
+        )
         self.skill_distiller = TrajectoryDistiller(database, self.skill_registry, self.runs, self.messages, ContractRepository(database))
 
     def schedule(self, run_id: str) -> asyncio.Task:

@@ -1,5 +1,6 @@
 """Run control, durable event streaming, evidence and report reads."""
 
+import hashlib
 import json
 
 from fastapi import APIRouter, Depends, Header, Query, Request, status
@@ -9,8 +10,10 @@ from backend.app.dependencies import get_database, get_event_stream, get_run_ser
 from backend.app.schemas import ClarificationSubmit, RunControl
 from deepresearch_agent.harness.errors import AppError, ErrorCode
 from deepresearch_agent.persistence.repositories import (
-    ArtifactRepository, ContractRepository, EvidenceRepository, MessageRepository, RunRepository,
+    ArtifactRepository, CheckpointRepository, ContractRepository, EvidenceRepository,
+    MessageRepository, RunRepository,
 )
+from deepresearch_agent.context import ArtifactEditContextBuilder
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -101,4 +104,69 @@ async def get_report(run_id: str, database=Depends(get_database)):
             {"check_id": check.check_id, "kind": check.kind, "required": bool(check.required), "passed": None if check.passed is None else bool(check.passed), "evidence": json.loads(check.evidence_json or "{}")}
             for check in checks
         ],
+    }
+
+
+@router.get("/{run_id}/context")
+async def get_context_inspector(
+    run_id: str, database=Depends(get_database), run_service=Depends(get_run_service),
+):
+    """Return the durable, structured Context Pack without exposing the raw model prompt."""
+    run = await require_run(database, run_id)
+    checkpoint = await CheckpointRepository(database).latest(run_id)
+    if checkpoint is None:
+        return {"run_id": run_id, "ready": False, "status": run.status}
+    if not CheckpointRepository.verify(checkpoint):
+        raise AppError(ErrorCode.CONFLICT, "Run 上下文 checkpoint 完整性校验失败")
+
+    state = json.loads(checkpoint.state_json or "{}")
+    snapshot = state.get("context_snapshot") or {}
+    artifact_edit = snapshot.get("artifact_edit")
+    artifact_verification = None
+    if artifact_edit:
+        message = await MessageRepository(database).get_assistant_for_run(run_id)
+        current_sections = {
+            section.heading: section.sha256
+            for section in ArtifactEditContextBuilder.parse_sections(message.content if message else "")
+        }
+        preserved = []
+        for section in artifact_edit.get("preserve_sections", []):
+            actual = current_sections.get(section["heading"])
+            preserved.append({
+                "heading": section["heading"], "expected_sha256": section["sha256"],
+                "actual_sha256": actual, "passed": actual == section["sha256"],
+            })
+        target_before = hashlib.sha256(artifact_edit.get("target_content", "").encode("utf-8")).hexdigest()
+        target_after = current_sections.get(artifact_edit.get("target_heading"))
+        artifact_verification = {
+            "available": message is not None,
+            "target_heading": artifact_edit.get("target_heading"),
+            "target_changed": bool(target_after and target_after != target_before),
+            "preserved_sections": preserved,
+            "all_preserved": bool(preserved) and all(item["passed"] for item in preserved),
+        }
+
+    return {
+        "run_id": run_id, "ready": bool(snapshot), "status": run.status,
+        "checkpoint": {
+            "version": checkpoint.version, "stage": checkpoint.stage,
+            "state_hash": checkpoint.state_hash, "verified": True,
+            "created_at": checkpoint.created_at,
+        },
+        "stable_snapshot_id": snapshot.get("stable_snapshot_id"),
+        "memory_snapshot_version": snapshot.get("memory_snapshot_version", 0),
+        "stable_blocks": snapshot.get("stable_blocks", []),
+        "dynamic_blocks": snapshot.get("dynamic_blocks", []),
+        "retrieval_trace": snapshot.get("retrieval_trace", []),
+        "token_usage_by_block": snapshot.get("token_usage_by_block", {}),
+        "total_input_tokens": snapshot.get("total_input_tokens", 0),
+        "curated_memory": snapshot.get("curated_memory", []),
+        "recent_messages": snapshot.get("recent_messages", []),
+        "session_summary": snapshot.get("session_summary") or {},
+        "historical_recall_searched": bool(snapshot.get("historical_recall_searched")),
+        "historical_recall": snapshot.get("historical_recall", []),
+        "used_session_ids": snapshot.get("used_session_ids", []),
+        "selected_skill": snapshot.get("selected_skill"),
+        "artifact_edit": artifact_edit,
+        "artifact_verification": artifact_verification,
     }

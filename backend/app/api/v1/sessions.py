@@ -6,12 +6,16 @@ from backend.app.dependencies import get_chat_service, get_database
 from backend.app.schemas import MessageSend, SessionCreate, SessionPatch
 from deepresearch_agent.harness.errors import AppError, ErrorCode
 from deepresearch_agent.persistence.repositories import MessageRepository, RunRepository, SessionRepository
+from deepresearch_agent.sessions import SessionSearchService
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 
 def session_dict(item):
-    return {name: getattr(item, name) for name in ("session_id", "title", "status", "summary_json", "created_at", "updated_at", "archived_at")}
+    return {name: getattr(item, name) for name in (
+        "session_id", "title", "status", "summary_json", "memory_snapshot_version",
+        "memory_snapshot_created_at", "created_at", "updated_at", "archived_at",
+    )}
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -28,6 +32,22 @@ async def list_sessions(
     items = await repository.list(limit=limit, offset=offset, include_archived=include_archived)
     total = await repository.count(include_archived=include_archived)
     return {"items": [session_dict(item) for item in items], "total": total, "offset": offset, "limit": limit, "next_offset": offset + len(items) if offset + len(items) < total else None}
+
+
+@router.get("/search")
+async def search_sessions(
+    q: str | None = None, session_id: str | None = None, around_message_id: str | None = None,
+    limit: int = Query(3, ge=1, le=20), window: int = Query(5, ge=1, le=20),
+    detail: str = Query("adaptive", pattern="^(adaptive|full)$"), database=Depends(get_database),
+):
+    service = SessionSearchService(MessageRepository(database), SessionRepository(database))
+    if session_id and around_message_id:
+        return await service.around(session_id, around_message_id, window=window)
+    if session_id:
+        return await service.read(session_id, limit=min(500, limit * 50))
+    if q:
+        return {"items": [item.to_dict() for item in await service.search(q, limit=limit, window=window, detail=detail)]}
+    return {"items": await service.browse(limit=limit)}
 
 
 @router.get("/{session_id}")

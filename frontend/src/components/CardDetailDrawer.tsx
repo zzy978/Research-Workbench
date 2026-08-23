@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { motion } from "motion/react";
-import { Evidence, Report, Run } from "../types/api";
+import { ContextInspector, Evidence, Report, Run } from "../types/api";
+import { ContextInspectorView } from "./ContextInspectorView";
 import { ReportView } from "./ReportView";
 import { STAGES, VERIFICATION_LABELS } from "./stageMeta";
 import { StageFeed } from "./stageFeed";
@@ -11,6 +12,7 @@ interface CardDetailDrawerProps {
   feed: StageFeed;
   report?: Report | null;
   evidence: Evidence[];
+  context?: ContextInspector | null;
   onEvidence: (item: Evidence) => void;
   onClose: () => void;
 }
@@ -81,11 +83,11 @@ function ToolList({ feed }: { feed: StageFeed }) {
   </div>;
 }
 
-export function CardDetailDrawer({ stageId, run, feed, report, evidence, onEvidence, onClose }: CardDetailDrawerProps) {
+export function CardDetailDrawer({ stageId, run, feed, report, evidence, context, onEvidence, onClose }: CardDetailDrawerProps) {
   const stage = STAGES.find((item) => item.id === stageId) ?? STAGES[2];
   return <motion.div className="drawer-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }} onClick={onClose}>
     <motion.aside
-      className="card-detail-drawer"
+      className={`card-detail-drawer${stageId === "context_building" ? " context-drawer" : ""}`}
       initial={{ x: "100%" }}
       animate={{ x: 0 }}
       exit={{ x: "100%" }}
@@ -105,12 +107,8 @@ export function CardDetailDrawer({ stageId, run, feed, report, evidence, onEvide
 
       {stageId === "context_building" && (
         <div className="drawer-body">
-          <p className="drawer-desc">检索历史会话与语义记忆，为研究构建上下文基础。</p>
-          <dl className="drawer-stats">
-            <div><dt>复用消息</dt><dd>{feed.contextInfo?.usedMessages ?? 0}</dd></div>
-            <div><dt>语义记忆</dt><dd>{feed.contextInfo?.memories ?? 0}</dd></div>
-            <div><dt>采集证据</dt><dd>{feed.contextCount}</dd></div>
-          </dl>
+          <p className="drawer-desc">检查实际进入本 Run 的冻结 Memory、稳定/动态上下文块、按需历史召回、压缩与局部编辑保护。</p>
+          <ContextInspectorView context={context} />
         </div>
       )}
 

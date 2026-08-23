@@ -68,8 +68,14 @@ class PrefixAwareChatOpenAI(ChatOpenAI):
             self._record_usage(last_chunk)
 
 
-def get_llm_model():
+def get_llm_model(*, model=None, temperature=None, max_tokens=None):
     config = {k: v for k, v in OPENAI_LLM_CONFIG.items() if v is not None and v != ""}
+    if model:
+        config["model"] = model
+    if temperature is not None:
+        config["temperature"] = temperature
+    if max_tokens is not None:
+        config["max_tokens"] = max_tokens
     return PrefixAwareChatOpenAI(**config)
 
 def get_stream_llm_model():

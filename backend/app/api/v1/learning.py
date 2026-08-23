@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy import select
 
 from backend.app.dependencies import get_database, get_memory_service, get_skill_services
-from backend.app.schemas import MemoryLifecycleUpdate
+from backend.app.schemas import MemoryCreate, MemoryLifecycleUpdate
 from deepresearch_agent.harness.errors import AppError, ErrorCode
 from deepresearch_agent.persistence.models import EvalRunModel, MemoryModel, SkillCandidateModel, SkillVersionModel
 from deepresearch_agent.memory import MemoryRejected
@@ -18,22 +18,44 @@ router = APIRouter(tags=["learning"])
 
 
 @router.get("/memories")
-async def list_memories(q: str | None = None, status_filter: str | None = None, database=Depends(get_database)):
+async def list_memories(q: str | None = None, status_filter: str | None = None, target: str | None = None, database=Depends(get_database)):
     if q:
         items = await MemoryRepository(database).search(q, status=status_filter, limit=100)
+        if target:
+            items = [item for item in items if (item.target or item.scope) == target]
     else:
         async with database.sessions() as session:
             statement = select(MemoryModel).where(MemoryModel.deleted_at.is_(None))
             if status_filter:
                 statement = statement.where(MemoryModel.status == status_filter)
+            if target:
+                statement = statement.where((MemoryModel.target == target) | ((MemoryModel.target.is_(None)) & (MemoryModel.scope == target)))
             items = list((await session.execute(statement.order_by(MemoryModel.updated_at.desc()).limit(100))).scalars())
     return {"items": [
-        {"memory_id": item.memory_id, "session_id": item.session_id, "scope": item.scope, "kind": item.kind,
+        {"memory_id": item.memory_id, "target": item.target or item.scope, "scope": item.target or item.scope, "kind": item.kind,
          "content": item.content, "provenance_refs": json.loads(item.provenance_json or "[]"), "confidence": item.confidence,
          "valid_from": item.valid_from, "expires_at": item.expires_at, "supersedes": item.supersedes,
          "status": item.status, "created_by": item.created_by, "created_at": item.created_at, "updated_at": item.updated_at}
         for item in items
     ], "total": len(items)}
+
+
+@router.get("/memories/capacity")
+async def memory_capacity(memory_service=Depends(get_memory_service)):
+    return {"targets": await memory_service.capacities()}
+
+
+@router.post("/memories", status_code=status.HTTP_201_CREATED)
+async def create_memory(payload: MemoryCreate, memory_service=Depends(get_memory_service)):
+    try:
+        item = await memory_service.create_candidate(
+            target=payload.target, content=payload.content, kind=payload.kind,
+            provenance_refs=payload.provenance_refs, created_by="user",
+            activate=payload.activate,
+        )
+    except MemoryRejected as exc:
+        raise AppError(ErrorCode.CONFLICT, str(exc)) from exc
+    return memory_service.serialize(item)
 
 
 @router.patch("/memories/{memory_id}")

@@ -18,6 +18,7 @@ class MemoryPolicy:
         (re.compile(r"\b(?:api[_ -]?key|access[_ -]?token|bearer)\s*[:=]\s*\S+", re.I), "疑似访问凭据"),
         (re.compile(r"(?:[A-Za-z]:\\(?:Users|Windows)\\|/(?:home|etc|root)/)", re.I), "绝对敏感路径"),
         (re.compile(r"(?:忽略|绕过|覆盖).{0,20}(?:系统|规则|指令)|(?:泄露|输出).{0,20}(?:密钥|token)", re.I), "提示注入文本"),
+        (re.compile(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff]"), "不可见或双向控制字符"),
     )
 
     def validate(self, content: str) -> MemoryPolicyVerdict:
@@ -28,4 +29,3 @@ class MemoryPolicy:
             if pattern.search(normalized):
                 return MemoryPolicyVerdict(False, reason)
         return MemoryPolicyVerdict(True)
-

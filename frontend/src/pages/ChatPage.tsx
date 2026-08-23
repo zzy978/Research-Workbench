@@ -121,6 +121,7 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
   const { events, run, connection, refresh } = useRunEvents(runId);
   const evidence = useQuery({ queryKey: ["evidence", runId], queryFn: () => api.evidence(runId!), enabled: Boolean(runId), refetchInterval: run && !TERMINAL.includes(run.status) ? RUN_POLL_MS : false });
   const report = useQuery({ queryKey: ["report", runId], queryFn: () => api.report(runId!), enabled: Boolean(runId), refetchInterval: run && !TERMINAL.includes(run.status) ? RUN_POLL_MS : false });
+  const contextInspector = useQuery({ queryKey: ["context", runId], queryFn: () => api.context(runId!), enabled: Boolean(runId), refetchInterval: run && !TERMINAL.includes(run.status) ? RUN_POLL_MS : false });
   const cacheStats = useQuery({ queryKey: ["cacheStats"], queryFn: api.cacheStats, refetchInterval: 5000 });
 
   useEffect(() => { localStorage.setItem("source_mode", source); }, [source]);
@@ -136,6 +137,7 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
       queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
       queryClient.invalidateQueries({ queryKey: ["report", runId] });
       queryClient.invalidateQueries({ queryKey: ["evidence", runId] });
+      queryClient.invalidateQueries({ queryKey: ["context", runId] });
     }
   }, [run?.status]);
 
@@ -168,7 +170,7 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
     switch (stage.id) {
       case "context_building": {
         const info = feed.contextInfo;
-        return <CardSummary lines={info ? [`已复用 ${info.usedMessages} 条消息`, `语义记忆 ${info.memories} 条`] : ["构建检索上下文…"]} meta={`证据 ${feed.contextCount}`} />;
+        return <CardSummary lines={info ? [`已复用 ${info.usedMessages} 条当前会话消息`, `精选 Memory ${info.memories} 条 · 历史召回 ${info.historicalRecall} 个 Session`] : ["构建检索上下文…"]} meta={info ? `上下文 ${info.tokens} tokens` : `证据 ${feed.contextCount}`} />;
       }
       case "planning": {
         const tasks = feed.planTasks;
@@ -254,6 +256,6 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
 
     {run?.status === "needs_user_input" && <ClarificationCard onSubmit={async (content) => { await api.clarify(run.run_id, content); await refresh(); }} />}
     <EvidenceDrawer item={selectedEvidence} onClose={() => setSelectedEvidence(null)} />
-    <AnimatePresence>{selectedStage && run && <CardDetailDrawer stageId={selectedStage} run={run} feed={feed} report={report.data} evidence={evidence.data?.items ?? []} onEvidence={setSelectedEvidence} onClose={() => setSelectedStage(null)} />}</AnimatePresence>
+    <AnimatePresence>{selectedStage && run && <CardDetailDrawer stageId={selectedStage} run={run} feed={feed} report={report.data} evidence={evidence.data?.items ?? []} context={contextInspector.data} onEvidence={setSelectedEvidence} onClose={() => setSelectedStage(null)} />}</AnimatePresence>
   </main>;
 }

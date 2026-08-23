@@ -88,3 +88,8 @@ class MemoryService:
             "created_at": item.created_at, "updated_at": item.updated_at,
         }
 
+
+# Compatibility: the production implementation is the bounded curated store.
+# Keep this module path importable while preventing a second Memory behavior.
+from .curated import CuratedMemoryService, MemoryRejected, MemoryService  # noqa: E402,F401
+

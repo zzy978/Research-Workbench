@@ -53,7 +53,13 @@ def create_app(
     app.state.run_service = run_service
     app.state.chat_service = ChatService(SessionRepository(database), RunRepository(database), run_service)
     app.state.event_stream = EventStreamService(run_service.events, run_service.runs, run_service.event_bus)
-    app.state.memory_service = MemoryService(MemoryRepository(database), AuditRepository(database))
+    app.state.memory_service = MemoryService(
+        MemoryRepository(database), AuditRepository(database),
+        user_max_tokens=settings.MEMORY_USER_MAX_TOKENS,
+        project_max_tokens=settings.MEMORY_PROJECT_MAX_TOKENS,
+        user_max_chars=settings.MEMORY_USER_MAX_CHARS,
+        project_max_chars=settings.MEMORY_PROJECT_MAX_CHARS,
+    )
     skill_repository = SkillRepository(database)
     app.state.skill_services = {
         "repository": skill_repository,

@@ -54,7 +54,32 @@ class Database:
 
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
+            # create_all is used by local/dev startup and does not alter old
+            # SQLite tables. Keep additive compatibility with the Alembic 0002
+            # migration so an existing local database can still start safely.
+            await connection.run_sync(self._ensure_additive_columns)
             await install_fts(connection)
+
+    @staticmethod
+    def _ensure_additive_columns(connection) -> None:
+        required = {
+            "sessions": {
+                "memory_snapshot_json": "TEXT",
+                "memory_snapshot_version": "INTEGER",
+                "memory_snapshot_created_at": "VARCHAR(40)",
+            },
+            "memories": {
+                "target": "VARCHAR(32)",
+                "archived_at": "VARCHAR(40)",
+            },
+        }
+        for table_name, columns in required.items():
+            existing = {row[1] for row in connection.exec_driver_sql(f"PRAGMA table_info({table_name})").fetchall()}
+            for name, sql_type in columns.items():
+                if name not in existing:
+                    connection.exec_driver_sql(f"ALTER TABLE {table_name} ADD COLUMN {name} {sql_type}")
+        connection.exec_driver_sql("UPDATE memories SET target = scope WHERE target IS NULL AND scope IN ('user','project')")
+        connection.exec_driver_sql("UPDATE memories SET status = 'archived' WHERE status = 'expired'")
 
     async def foreign_key_violations(self) -> list[tuple]:
         async with self.engine.connect() as connection:

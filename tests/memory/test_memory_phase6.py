@@ -31,6 +31,17 @@ async def new_session(database, title="memory"):
     return await SessionRepository(database).create(SessionCreate(title=title))
 
 
+class FakeMemoryLlm:
+    def __init__(self, payload):
+        self.payload = payload
+        self.received = None
+
+    async def ainvoke(self, messages):
+        self.received = messages
+        content = self.payload if isinstance(self.payload, str) else json.dumps(self.payload, ensure_ascii=False)
+        return type("MemoryLlmResponse", (), {"content": content})()
+
+
 @pytest.mark.asyncio
 async def test_query_resolver_uses_only_same_session_history(database):
     session = await new_session(database)
@@ -123,14 +134,57 @@ async def test_extractor_requires_verified_completed_run(database):
         RunCreate(session_id=session.session_id, trigger_message_id="atomic", source_mode=SourceMode.GRAPHRAG, workflow_mode=WorkflowMode.DEEP_RESEARCH),
     )
     repository = MemoryRepository(database)
-    extractor = MemoryExtractor(MemoryService(repository, AuditRepository(database)), runs, messages, ContractRepository(database))
+    llm = FakeMemoryLlm({"candidates": [{
+        "target": "user", "kind": "preference", "content": "用户偏好简短报告",
+        "confidence": 0.93, "evidence_quote": "我偏好简短报告", "rationale": "明确的长期偏好",
+    }]})
+    extractor = MemoryExtractor(
+        MemoryService(repository, AuditRepository(database)), runs, messages,
+        ContractRepository(database), llm=llm,
+    )
     assert await extractor.extract_from_completed_run(run.run_id) == []
     contracts = ContractRepository(database)
     await contracts.upsert(ContractCheckData(check_id=f"check-{run.run_id}", run_id=run.run_id, kind="source_match", verifier="test", verifier_version="1", passed=True))
     await runs.complete_verified(run.run_id, assistant_content="# 报告\n\n这是通过证据验证后形成的结论，内容足够用于创建审阅候选。", usage={})
     created = await extractor.extract_from_completed_run(run.run_id)
-    assert {item.kind for item in created} == {"preference", "fact"}
+    assert {item.kind for item in created} == {"preference"}
     assert all(item.status == "candidate" for item in created)
+    assert all(item.created_by == "llm_review" for item in created)
+    assert "请记住我偏好简短报告" in llm.received[1].content
+    assert "这是通过证据验证后形成的结论" not in llm.received[1].content
+
+
+@pytest.mark.asyncio
+async def test_llm_extractor_accepts_implicit_feedback_but_requires_grounded_quote(database):
+    sessions, messages, runs = SessionRepository(database), MessageRepository(database), RunRepository(database)
+    session = await sessions.create(SessionCreate(title="implicit preference"))
+    trigger, run, _ = await runs.create_for_user_message(
+        MessageCreate(session_id=session.session_id, role="user", content="这个表格太复杂了，我更容易阅读简洁的要点。", client_message_id="implicit"),
+        RunCreate(session_id=session.session_id, trigger_message_id="atomic", source_mode=SourceMode.GRAPHRAG, workflow_mode=WorkflowMode.DEEP_RESEARCH),
+    )
+    contracts = ContractRepository(database)
+    await contracts.upsert(ContractCheckData(check_id=f"check-{run.run_id}", run_id=run.run_id, kind="source_match", verifier="test", verifier_version="1", passed=True))
+    await runs.complete_verified(run.run_id, assistant_content="# 回答\n\n已经改为要点。", usage={})
+    llm = FakeMemoryLlm({"candidates": [
+        {"target": "user", "kind": "preference", "content": "用户偏好简洁要点，避免复杂表格", "confidence": 0.91, "evidence_quote": "我更容易阅读简洁的要点", "rationale": "用户反馈"},
+        {"target": "user", "kind": "preference", "content": "用户偏好英文", "confidence": 0.99, "evidence_quote": "我偏好英文", "rationale": "无原文证据"},
+        {"target": "project", "kind": "decision", "content": "项目固定使用表格", "confidence": 0.60, "evidence_quote": "这个表格太复杂了", "rationale": "置信度不足"},
+    ]})
+    extractor = MemoryExtractor(
+        MemoryService(MemoryRepository(database), AuditRepository(database)), runs, messages,
+        contracts, llm=llm, min_confidence=0.75,
+    )
+    created = await extractor.extract_from_completed_run(run.run_id)
+    assert len(created) == 1
+    assert created[0].content == "用户偏好简洁要点，避免复杂表格"
+    assert json.loads(created[0].provenance_json) == [f"run:{run.run_id}", f"message:{trigger.message_id}"]
+
+
+def test_llm_extractor_rejects_malformed_structured_output():
+    with pytest.raises(ValueError, match="JSON"):
+        MemoryExtractor._parse_json("I think the user likes concise reports")
+    with pytest.raises(ValueError, match="candidates"):
+        MemoryExtractor._parse_json('{"memory": []}')
 
 
 @pytest.mark.asyncio
@@ -139,7 +193,7 @@ async def test_memory_delete_does_not_delete_messages_or_unrelated_cache(databas
     messages = MessageRepository(database)
     message, _ = await messages.append(MessageCreate(session_id=session.session_id, role="user", content="历史消息仍保留", client_message_id="keep"))
     service = MemoryService(MemoryRepository(database), AuditRepository(database))
-    item = await service.create_candidate(content="历史消息仍保留", scope="session", kind="decision", provenance_refs=[f"message:{message.message_id}"], confidence=0.8, session_id=session.session_id)
+    item = await service.create_candidate(content="历史消息仍保留", target="project", kind="decision", provenance_refs=[f"message:{message.message_id}"], confidence=0.8)
     assert await service.delete(item.memory_id)
     assert (await messages.get(message.message_id)).content == "历史消息仍保留"
 

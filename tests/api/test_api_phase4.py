@@ -10,7 +10,8 @@ from backend.app.schemas import MessageCreate, RunCreate, SessionCreate
 from deepresearch_agent.agents.multi_agent.core.execution_record import ExecutionMetadata, ExecutionRecord, ToolCall
 from deepresearch_agent.agents.multi_agent.core.retrieval_result import RetrievalMetadata, RetrievalResult
 from deepresearch_agent.harness import SourceMode, WorkflowMode
-from deepresearch_agent.persistence.repositories import RunRepository, SessionRepository
+from deepresearch_agent.persistence.repositories import CheckpointRepository, RunRepository, SessionRepository
+from deepresearch_agent.context import ArtifactEditContextBuilder
 from deepresearch_agent.evolution import SkillSpec
 
 
@@ -125,10 +126,50 @@ def test_run_report_evidence_and_durable_sse_replay(client):
     assert evidence["total"] == 2 and evidence["items"][0]["source_mode"] == "graphrag"
     assert report["content"].startswith("# 研究报告")
     assert report["artifact"]["sha256"] and all(item["passed"] for item in report["verification"] if item["required"])
+    context = client.get(f"/api/v1/runs/{run_id}/context")
+    assert context.status_code == 200
+    inspected = context.json()
+    assert inspected["ready"] is True
+    assert inspected["checkpoint"]["verified"] is True
+    assert inspected["stable_snapshot_id"]
+    assert inspected["total_input_tokens"] > 0
+    assert inspected["stable_blocks"] and inspected["dynamic_blocks"]
+    assert all({"name", "source_type", "source_ids", "trust_level", "tokens", "trimmed"} <= set(item) for item in inspected["retrieval_trace"])
     with client.stream("GET", f"/api/v1/runs/{run_id}/events", headers={"Last-Event-ID": "1"}) as response:
         body = "".join(response.iter_text())
     assert "event: run.completed" in body
     assert "id: 1\n" not in body
+
+
+def test_context_inspector_verifies_preserved_report_sections(client):
+    run_id = send(client, new_session(client)).json()["run_id"]
+    assert wait_terminal(client, run_id)["status"] == "completed"
+    report = client.get(f"/api/v1/runs/{run_id}/report").json()["content"]
+    sections = ArtifactEditContextBuilder.parse_sections(report)
+    preserved = sections[0]
+
+    async def save_inspector_checkpoint():
+        await CheckpointRepository(client.app.state.database).save(run_id, "completed", {
+            "context_snapshot": {
+                "stable_snapshot_id": "stable-demo", "memory_snapshot_version": 2,
+                "stable_blocks": [], "dynamic_blocks": [], "retrieval_trace": [],
+                "token_usage_by_block": {}, "total_input_tokens": 12,
+                "curated_memory": [], "recent_messages": [], "session_summary": {},
+                "historical_recall_searched": False, "historical_recall": [], "used_session_ids": [],
+                "artifact_edit": {
+                    "operation": "replace_section", "base_run_id": "base-run", "base_sha256": "a" * 64,
+                    "target_heading": "方法", "target_content": "## 方法\n\n旧的方法。",
+                    "preserve_sections": [{"heading": preserved.heading, "sha256": preserved.sha256}],
+                },
+            },
+        })
+
+    client.portal.call(save_inspector_checkpoint)
+    payload = client.get(f"/api/v1/runs/{run_id}/context").json()
+    verification = payload["artifact_verification"]
+    assert verification["available"] is True and verification["target_changed"] is True
+    assert verification["all_preserved"] is True
+    assert verification["preserved_sections"][0]["passed"] is True
 
 
 def test_cancel_queued_run(client):
@@ -163,8 +204,28 @@ def test_capabilities_and_openapi_are_complete(client, monkeypatch):
     capabilities = client.get("/api/v1/capabilities").json()
     assert capabilities["sources"]["web"] == {"available": False, "reason": "TAVILY_API_KEY 未配置"}
     paths = client.get("/openapi.json").json()["paths"]
-    required = {"/api/v1/sessions", "/api/v1/runs/{run_id}/events", "/api/v1/memories", "/api/v1/skills"}
+    required = {"/api/v1/sessions", "/api/v1/sessions/search", "/api/v1/runs/{run_id}/events", "/api/v1/runs/{run_id}/context", "/api/v1/memories", "/api/v1/memories/capacity", "/api/v1/skills"}
     assert required.issubset(paths)
+
+
+def test_curated_memory_capacity_and_session_search_api(client):
+    created = client.post("/api/v1/memories", json={
+        "target": "user", "content": "用户偏好简洁报告", "kind": "preference",
+        "provenance_refs": ["user:explicit"], "activate": True,
+    })
+    assert created.status_code == 201
+    assert created.json()["target"] == "user" and created.json()["status"] == "active"
+    capacity = client.get("/api/v1/memories/capacity")
+    assert capacity.status_code == 200
+    assert capacity.json()["targets"]["user"]["tokens"] > 0
+
+    old_session = new_session(client)
+    run_id = send(client, old_session).json()["run_id"]
+    assert wait_terminal(client, run_id)["status"] == "completed"
+    new_session(client)
+    found = client.get("/api/v1/sessions/search", params={"q": "生成研究报告", "detail": "full"})
+    assert found.status_code == 200
+    assert found.json()["items"] and found.json()["items"][0]["detail"] == "full"
 
 
 def test_ten_turn_session_survives_app_restart(tmp_path):

@@ -25,8 +25,8 @@ export interface StageFeed {
   tools: ToolEntry[];
   contextCount: number;
   taskCount: number;
-  /** 语义记忆 / 复用消息（context.completed payload） */
-  contextInfo?: { memories: number; usedMessages: number };
+  /** 冻结 Memory / 历史召回 / 复用消息（context.completed payload） */
+  contextInfo?: { memories: number; usedMessages: number; historicalRecall: number; tokens: number };
   reportChars?: number;
   verifyFailures: Array<{ kind: string; message?: string }>;
   verification: Report["verification"];
@@ -121,8 +121,10 @@ export function deriveStageFeed(events: RunEvent[], report?: Report | null): Sta
   const contextEvent = events.find((event) => event.event_type === "context.completed");
   if (contextEvent) {
     contextInfo = {
-      memories: numberOr(contextEvent.semantic_memory_count),
+      memories: numberOr(contextEvent.curated_memory_count),
       usedMessages: Array.isArray(contextEvent.used_message_ids) ? contextEvent.used_message_ids.length : 0,
+      historicalRecall: numberOr(contextEvent.historical_recall_count),
+      tokens: numberOr(contextEvent.context_tokens),
     };
   }
 

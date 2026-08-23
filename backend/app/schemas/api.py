@@ -57,8 +57,16 @@ class RunControl(ApiModel):
 
 class MemoryLifecycleUpdate(ApiModel):
     content: str | None = Field(default=None, min_length=1, max_length=10000)
-    status: Literal["candidate", "active", "rejected", "expired"] | None = None
+    status: Literal["candidate", "active", "rejected", "archived", "expired"] | None = None
     expires_at: str | None = Field(default=None, max_length=40)
+
+
+class MemoryCreate(ApiModel):
+    target: Literal["user", "project"]
+    content: str = Field(min_length=1, max_length=10000)
+    kind: Literal["preference", "fact", "decision", "lesson", "note"] = "note"
+    provenance_refs: list[str] = Field(default_factory=list, max_length=20)
+    activate: bool = False
 
 
 class SkillActionResponse(ApiModel):

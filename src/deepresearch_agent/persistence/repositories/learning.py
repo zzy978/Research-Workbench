@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 
 from deepresearch_agent.persistence.database import Database
 from deepresearch_agent.persistence.models import AuditEventModel, EvalRunModel, MemoryModel, SkillCandidateModel, SkillVersionModel
@@ -18,7 +18,8 @@ class MemoryRepository:
 
     async def create_candidate(self, *, content: str, scope: str, kind: str, provenance_refs: list[str], confidence: float, session_id: Optional[str] = None, created_by: str = "agent", supersedes: Optional[str] = None, expires_at: Optional[str] = None) -> MemoryModel:
         now = utc_now_iso()
-        model = MemoryModel(memory_id=new_id("mem"), session_id=session_id, scope=scope, kind=kind, content=content, provenance_json=json_text(provenance_refs), confidence=confidence, valid_from=now, expires_at=expires_at, supersedes=supersedes, status="candidate", created_by=created_by, created_at=now, updated_at=now)
+        target = scope if scope in {"user", "project"} else None
+        model = MemoryModel(memory_id=new_id("mem"), session_id=session_id, target=target, scope=scope, kind=kind, content=content, provenance_json=json_text(provenance_refs), confidence=confidence, valid_from=now, expires_at=expires_at, supersedes=supersedes, status="candidate", created_by=created_by, created_at=now, updated_at=now)
         async with self.database.transaction() as session:
             session.add(model)
         return model
@@ -46,6 +47,37 @@ class MemoryRepository:
             ).order_by(MemoryModel.confidence.desc(), MemoryModel.updated_at.desc()).limit(limit)
             return list((await session.execute(statement)).scalars())
 
+    async def list_curated(self, *, statuses: tuple[str, ...] = ("active",), target: str | None = None, now: str | None = None, limit: int = 200) -> list[MemoryModel]:
+        """Return only the bounded user/project store used in prompt snapshots."""
+        async with self.database.sessions() as session:
+            effective_target = func.coalesce(MemoryModel.target, MemoryModel.scope)
+            statement = select(MemoryModel).where(
+                MemoryModel.deleted_at.is_(None),
+                MemoryModel.status.in_(statuses),
+                effective_target.in_(("user", "project")),
+            )
+            if target is not None:
+                statement = statement.where(effective_target == target)
+            if now is not None:
+                statement = statement.where(MemoryModel.expires_at.is_(None) | (MemoryModel.expires_at > now))
+            statement = statement.order_by(effective_target, MemoryModel.updated_at, MemoryModel.memory_id).limit(limit)
+            return list((await session.execute(statement)).scalars())
+
+    async def snapshot_version(self) -> int:
+        """Monotonic-enough durable version derived from active-store updates."""
+        async with self.database.sessions() as session:
+            effective_target = func.coalesce(MemoryModel.target, MemoryModel.scope)
+            count, latest = (await session.execute(
+                select(func.count(MemoryModel.memory_id), func.max(MemoryModel.updated_at)).where(
+                    MemoryModel.deleted_at.is_(None), MemoryModel.status == "active",
+                    effective_target.in_(("user", "project")),
+                )
+            )).one()
+        if not latest:
+            return 0
+        digits = "".join(character for character in latest if character.isdigit())[:14]
+        return int(digits or 0) * 1000 + int(count or 0)
+
     async def list_active_for_conflict(self, *, scope: str, kind: str, session_id: Optional[str]) -> list[MemoryModel]:
         async with self.database.sessions() as session:
             statement = select(MemoryModel).where(
@@ -64,7 +96,7 @@ class MemoryRepository:
 
     async def soft_delete(self, memory_id: str) -> bool:
         now = utc_now_iso()
-        return await self.update_lifecycle(memory_id, deleted_at=now, status="expired")
+        return await self.update_lifecycle(memory_id, deleted_at=now, archived_at=now, status="archived")
 
     async def mark_provenance_for_review(self, provenance_ref: str) -> list[str]:
         """Return active factual memories to candidate state when a source becomes invalid."""

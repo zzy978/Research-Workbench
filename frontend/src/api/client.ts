@@ -1,4 +1,4 @@
-import { ApiError, CacheStats, Capabilities, Evidence, Report, Run, Session, SessionDetail, SourceMode, WorkflowMode } from "../types/api";
+import { ApiError, CacheStats, Capabilities, ContextInspector, CuratedMemory, Evidence, MemoryCapacity, Report, Run, Session, SessionDetail, SourceMode, WorkflowMode } from "../types/api";
 
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api/v1").replace(/\/$/, "");
 
@@ -28,8 +28,11 @@ export const api = {
   clarify: (id: string, content: string) => request(`/runs/${id}/clarifications`, { method: "POST", body: JSON.stringify({ content }) }),
   evidence: (id: string) => request<{items: Evidence[]; total: number}>(`/runs/${id}/evidence`),
   report: (id: string) => request<Report>(`/runs/${id}/report`),
-  memories: () => request<{items: Array<Record<string, unknown>>; total: number}>("/memories"),
-  patchMemory: (id: string, payload: Record<string, unknown>) => request(`/memories/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  context: (id: string) => request<ContextInspector>(`/runs/${id}/context`),
+  memories: () => request<{items: CuratedMemory[]; total: number}>("/memories"),
+  memoryCapacity: () => request<{targets: Record<"user" | "project", MemoryCapacity>}>("/memories/capacity"),
+  createMemory: (payload: Record<string, unknown>) => request<CuratedMemory>("/memories", { method: "POST", body: JSON.stringify(payload) }),
+  patchMemory: (id: string, payload: Record<string, unknown>) => request<CuratedMemory>(`/memories/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteMemory: (id: string) => request<void>(`/memories/${id}`, { method: "DELETE" }),
   skills: () => request<{versions: Array<Record<string, unknown>>; candidates: Array<Record<string, unknown>>}>("/skills"),
   evaluateSkill: (name: string, version: string) => request<Record<string, unknown>>(`/skills/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}/evaluate`, {method: "POST"}),
