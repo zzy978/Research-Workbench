@@ -204,8 +204,23 @@ def test_capabilities_and_openapi_are_complete(client, monkeypatch):
     capabilities = client.get("/api/v1/capabilities").json()
     assert capabilities["sources"]["web"] == {"available": False, "reason": "TAVILY_API_KEY 未配置"}
     paths = client.get("/openapi.json").json()["paths"]
-    required = {"/api/v1/sessions", "/api/v1/sessions/search", "/api/v1/runs/{run_id}/events", "/api/v1/runs/{run_id}/context", "/api/v1/memories", "/api/v1/memories/capacity", "/api/v1/skills"}
+    required = {"/api/v1/sessions", "/api/v1/sessions/search", "/api/v1/runs/{run_id}/events", "/api/v1/runs/{run_id}/context", "/api/v1/memories", "/api/v1/memories/capacity", "/api/v1/skills", "/api/v1/evaluations/summary", "/api/v1/evaluations/runs/{run_id}"}
     assert required.issubset(paths)
+
+
+def test_system_evaluation_api_reads_completed_run_metrics(client):
+    run_id = send(client, new_session(client)).json()["run_id"]
+    assert wait_terminal(client, run_id)["status"] == "completed"
+
+    run_metrics = client.get(f"/api/v1/evaluations/runs/{run_id}")
+    assert run_metrics.status_code == 200
+    assert run_metrics.json()["verified_completion"] is True
+    assert run_metrics.json()["citation_validity"] == 1.0
+
+    summary = client.get("/api/v1/evaluations/summary", params={"run_id": run_id, "include_runs": False})
+    assert summary.status_code == 200
+    assert summary.json()["verified_completion_rate"] == 1.0
+    assert summary.json()["runs"] == []
 
 
 def test_curated_memory_capacity_and_session_search_api(client):

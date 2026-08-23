@@ -151,6 +151,17 @@ python -m pytest -q                # 后端离线门禁（当前 101 passed）
 cd frontend && npm run build       # 前端类型检查 + 生产构建
 ```
 
+### 系统量化评测
+
+评测器从持久化 Run 轨迹计算 Verified/First-pass Completion、引用合法率、恢复与 Replan 成功率、Checkpoint 完整率、重复副作用率、P50/P95 时延和每个验证通过任务 Token；提供 Gold Evidence 时额外计算 Precision@K、Recall@K、MRR 与 nDCG@K。
+
+```powershell
+python scripts/evaluate_runs.py --output output/evaluation/summary.json
+python scripts/evaluate_runs.py --labels evals/system/cases.json --retrieval-k 10
+```
+
+语义 Claim Support 与报告质量只接受人工或独立 Judge 标签，未标注时不会用确定性引用规则伪造分数。数据格式和完整指标说明见 `evals/system/README.md`。
+
 ### 常用 API
 
 | 方法 | 路径 | 说明 |
@@ -163,6 +174,7 @@ cd frontend && npm run build       # 前端类型检查 + 生产构建
 | POST | `/api/v1/runs/{id}/cancel`、`/resume`、`/clarifications` | 取消 / 恢复 / 澄清 |
 | GET/PATCH/DELETE | `/api/v1/memories` | 记忆检索 / 编辑 / 删除 |
 | GET/POST | `/api/v1/skills`、`.../evaluate`、`.../promote`、`.../rollback` | Skill 查看 / 评测 / 启用 / 回滚 |
+| GET | `/api/v1/evaluations/summary`、`.../runs/{run_id}` | 聚合指标 / 单 Run 指标 |
 
 ---
 
@@ -190,6 +202,7 @@ cd frontend && npm run build       # 前端类型检查 + 生产构建
 │       ├── retrieval/            # base、tavily_provider、graphrag_provider、router（统一 Provider）
 │       ├── memory/               # episodic、semantic、session_summary、context_builder、service
 │       ├── evolution/            # SkillLoader、SkillRegistry、TrajectoryDistiller、Evaluator、Linter、Promotion
+│       ├── evaluation/           # Run/聚合指标、检索指标与 Gold 标签模型
 │       ├── persistence/          # SQLite、ArtifactStore、repositories、Alembic 迁移
 │       ├── graph/                # 知识图谱构建：extraction、indexing、processing、structure、community
 │       ├── pipelines/ingestion/  # 文档摄入（text_chunker、document_processor、file_reader）
@@ -202,7 +215,7 @@ cd frontend && npm run build       # 前端类型检查 + 生产构建
 ├── scripts/                      # start-local.ps1、stop-local.ps1、backup/restore、e2e-poll-check.ps1
 ├── skills/                       # Skill 定义目录（SKILLS_ROOT）
 ├── docs/acceptance/              # 验收矩阵与结果
-├── evals/                        # 基线场景结果与技能评测
+├── evals/                        # 基线、系统指标标签格式与技能评测
 ├── data/                         # 运行产物：app.db、artifacts（git 忽略）
 ├── cache/                        # 模型与检索缓存（git 忽略）
 ├── files/                        # 私有知识库文档目录（FILES_DIR）
