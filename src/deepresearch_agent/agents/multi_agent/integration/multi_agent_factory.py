@@ -50,6 +50,8 @@ class MultiAgentFactory:
         retrieval_router: Optional[RetrievalRouter] = None,
     ) -> OrchestratorBundle:
         planner = planner or BasePlanner()
+        # Evidence Card and section checkpoints use exact content/report hashes.
+        cache_manager = cache_manager or CacheManager(enable_vector_similarity=False)
         worker = worker or WorkerCoordinator(
             retrieval_provider=retrieval_provider,
             retrieval_router=retrieval_router,

@@ -18,6 +18,7 @@ from deepresearch_agent.harness.recovery import classify_exception, classify_ver
 from deepresearch_agent.harness.run_context import RunContext
 from deepresearch_agent.harness.state_machine import StateMachine
 from deepresearch_agent.context.artifact_edit import ArtifactEditContextBuilder
+from deepresearch_agent.config.settings import REPORT_RESERVED_TOKENS, VERIFICATION_RESERVED_TOKENS
 from deepresearch_agent.models.prefix_cache import set_current_run
 from deepresearch_agent.harness.report_safety import sanitize_report
 from deepresearch_agent.persistence.artifact_store import ArtifactStore
@@ -268,6 +269,23 @@ class HarnessRuntime:
                         await self.checkpoints.save(context, "failed")
                         continue
                     await self.checkpoints.save(context, "executing")
+                    remaining_tokens = max(
+                        0,
+                        budget.limits.max_llm_tokens - budget.usage.llm_tokens,
+                    )
+                    await self.events.publish(
+                        run_id,
+                        "budget.stage_reserved",
+                        stage="executing",
+                        payload={
+                            "remaining_tokens": remaining_tokens,
+                            "report_reserved_tokens": REPORT_RESERVED_TOKENS,
+                            "verification_reserved_tokens": VERIFICATION_RESERVED_TOKENS,
+                            "reserved_budget_fallback": remaining_tokens < (
+                                REPORT_RESERVED_TOKENS + VERIFICATION_RESERVED_TOKENS
+                            ),
+                        },
+                    )
                     await self._transition(context, RunStatus.REPORTING)
 
                 elif context.status is RunStatus.REPORTING:
@@ -278,7 +296,15 @@ class HarnessRuntime:
                     context.workflow_state = driver.snapshot()
                     await self._save_report_artifact(context)
                     await self.checkpoints.save(context, "reporting")
-                    await self.events.publish(run_id, "report.completed", stage="reporting", payload={"characters": len(context.report or "")})
+                    report_metrics = (
+                        driver.report_metrics() if hasattr(driver, "report_metrics") else {}
+                    )
+                    await self.events.publish(
+                        run_id,
+                        "report.completed",
+                        stage="reporting",
+                        payload={"characters": len(context.report or ""), **report_metrics},
+                    )
                     await self._transition(context, RunStatus.VERIFYING)
 
                 elif context.status is RunStatus.VERIFYING:
@@ -288,6 +314,11 @@ class HarnessRuntime:
                         evidence=evidence, min_evidence=int(context.config_snapshot.get("min_evidence", 1)),
                         required_sections=list(context.config_snapshot.get("required_sections", [])),
                         consistency_passed=driver.report_consistency(),
+                        evidence_card_coverage=(
+                            driver.evidence_card_coverage()
+                            if hasattr(driver, "evidence_card_coverage")
+                            else None
+                        ),
                     )
                     context.workflow_state = driver.snapshot()
                     context.workflow_state["verification_failures"] = verdict.failures

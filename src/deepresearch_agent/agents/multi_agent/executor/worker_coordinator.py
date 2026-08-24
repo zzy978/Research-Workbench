@@ -4,7 +4,7 @@
 根据 PlanExecutionSignal 调度不同类型的 Worker 执行任务，支持串行与并行模式。
 """
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 import logging
 
 from deepresearch_agent.agents.multi_agent.core.execution_record import (
@@ -82,6 +82,8 @@ class WorkerCoordinator:
         self,
         state: PlanExecuteState,
         signal: PlanExecutionSignal,
+        *,
+        stop_predicate: Optional[Callable[[], bool]] = None,
     ) -> List[ExecutionRecord]:
         """根据计划信号执行所有任务，返回执行记录列表。"""
         task_map = self._prepare_tasks(signal)
@@ -93,7 +95,9 @@ class WorkerCoordinator:
         if effective_mode == "parallel":
             results = self._execute_parallel(state, signal, task_map)
         else:
-            results = self._execute_sequential(state, signal, task_map)
+            results = self._execute_sequential(
+                state, signal, task_map, stop_predicate=stop_predicate,
+            )
 
         if state.plan is not None:
             node_status = [node.status for node in state.plan.task_graph.nodes]
@@ -141,10 +145,18 @@ class WorkerCoordinator:
         state: PlanExecuteState,
         signal: PlanExecutionSignal,
         task_map: Dict[str, TaskNode],
+        *,
+        stop_predicate: Optional[Callable[[], bool]] = None,
     ) -> List[ExecutionRecord]:
         results: List[ExecutionRecord] = []
         sequence = signal.execution_sequence or list(task_map.keys())
         for task_id in sequence:
+            if stop_predicate is not None and stop_predicate():
+                _LOGGER.warning(
+                    "执行阶段已到报告/验证预留边界，停止扩展后续任务: next_task=%s",
+                    task_id,
+                )
+                break
             task = task_map.get(task_id)
             if task is None:
                 _LOGGER.warning("计划信号中包含未知任务: %s", task_id)

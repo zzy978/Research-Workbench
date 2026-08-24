@@ -1,6 +1,6 @@
 /** 阶段画板元数据：阶段定义、中英文映射与派生逻辑（画板各组件共享） */
 
-/** 7 项完成验证的中文标签（画板验证卡 / 报告页复用） */
+/** 完成验证的中文标签（画板验证卡 / 报告页复用） */
 export const VERIFICATION_LABELS: Record<string, string> = {
   source_match: "来源匹配",
   min_evidence: "最小证据数",
@@ -9,6 +9,7 @@ export const VERIFICATION_LABELS: Record<string, string> = {
   claim_support: "主张支持",
   report_consistency: "报告一致性",
   source_diversity: "来源多样性",
+  evidence_card_coverage: "全量证据覆盖",
   custom: "自定义",
 };
 

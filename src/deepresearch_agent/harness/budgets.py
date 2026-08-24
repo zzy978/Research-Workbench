@@ -63,6 +63,13 @@ class BudgetManager:
         self._check("replans", self.usage.replans, self.limits.max_replans)
         self._check("task_retries", self.usage.task_retries, self.limits.max_task_retries)
 
+    def remaining_tokens(self) -> int:
+        return max(0, self.limits.max_llm_tokens - self.usage.llm_tokens)
+
+    def has_token_reserve(self, required: int) -> bool:
+        """Whether a later stage still has its reserved token envelope."""
+        return self.remaining_tokens() >= max(0, required)
+
     @staticmethod
     def _check(metric: str, observed: float, limit: float) -> None:
         if observed > limit:

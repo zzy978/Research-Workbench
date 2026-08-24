@@ -26,6 +26,10 @@ from deepresearch_agent.agents.multi_agent.reporter.section_writer import (
     SectionWriterConfig,
     SectionDraft,
 )
+from deepresearch_agent.agents.multi_agent.reporter.evidence_cards import (
+    EvidenceCard,
+    EvidenceCardPipeline,
+)
 from deepresearch_agent.agents.multi_agent.reporter.consistency_checker import (
     ConsistencyChecker,
     ConsistencyCheckResult,
@@ -49,7 +53,14 @@ from deepresearch_agent.config.settings import (
     MULTI_AGENT_ENABLE_PARALLEL_MAP,
     MULTI_AGENT_SECTION_MAX_EVIDENCE,
     MULTI_AGENT_SECTION_MAX_CONTEXT_CHARS,
+    EVIDENCE_CARD_MAX_TOKENS,
+    REPORT_BATCH_BUDGET_RATIO,
+    REPORT_BATCH_DIGEST_MAX_TOKENS,
+    REPORT_MAX_MODEL_CALLS,
+    REPORT_MAX_SECTIONS,
+    REPORT_SECTION_EVIDENCE_BUDGET,
 )
+from deepresearch_agent.harness.report_safety import add_inline_citations, has_internal_material
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -68,6 +79,12 @@ class ReporterConfig(BaseModel):
     max_tokens_per_reduce: int = Field(default=4000, ge=1000, description="Reduce阶段单次调用的最大token估算")
     enable_parallel_map: bool = Field(default=True, description="证据Map阶段是否启用并行")
     mapreduce_evidence_threshold: int = Field(default=20, ge=0, description="触发Map-Reduce模式的证据数量阈值")
+    evidence_card_max_tokens: int = Field(default=200, ge=60, description="单张 Evidence Card 的最大 Token")
+    section_evidence_budget: int = Field(default=12000, ge=1000, description="单章节 Evidence Card 上下文预算")
+    batch_budget_ratio: float = Field(default=0.70, ge=0.4, le=0.9, description="批处理占章节预算比例")
+    batch_digest_max_tokens: int = Field(default=600, ge=100, description="单个 Digest 最大 Token")
+    max_report_sections: int = Field(default=6, ge=1, description="报告最大章节数")
+    max_report_model_calls: int = Field(default=15, ge=1, description="报告阶段最大模型调用数")
 
 
 class SectionContent(BaseModel):
@@ -89,6 +106,11 @@ class ReportResult(BaseModel):
     final_report: str = Field(description="最终报告Markdown文本")
     references: Optional[str] = Field(default=None, description="引用列表Markdown")
     consistency_check: Optional[ConsistencyCheckResult] = Field(default=None, description="一致性检查结果")
+    evidence_cards: List[Dict[str, Any]] = Field(default_factory=list, description="全量 Evidence Card")
+    evidence_routing: Dict[str, List[str]] = Field(default_factory=dict, description="全量章节路由")
+    evidence_digests: Dict[str, List[Dict[str, Any]]] = Field(default_factory=dict, description="章节 Digest")
+    evidence_card_coverage: Dict[str, Any] = Field(default_factory=dict, description="全量覆盖结果")
+    report_metrics: Dict[str, Any] = Field(default_factory=dict, description="报告阶段指标")
 
 
 class BaseReporter:
@@ -122,6 +144,12 @@ class BaseReporter:
                 max_tokens_per_reduce=MULTI_AGENT_MAX_TOKENS_PER_REDUCE,
                 enable_parallel_map=MULTI_AGENT_ENABLE_PARALLEL_MAP,
                 section_writer=section_writer_config,
+                evidence_card_max_tokens=EVIDENCE_CARD_MAX_TOKENS,
+                section_evidence_budget=REPORT_SECTION_EVIDENCE_BUDGET,
+                batch_budget_ratio=REPORT_BATCH_BUDGET_RATIO,
+                batch_digest_max_tokens=REPORT_BATCH_DIGEST_MAX_TOKENS,
+                max_report_sections=REPORT_MAX_SECTIONS,
+                max_report_model_calls=REPORT_MAX_MODEL_CALLS,
             )
         self.config = config
         self._outline_builder = outline_builder or OutlineBuilder()
@@ -132,6 +160,13 @@ class BaseReporter:
         self._evidence_mapper = evidence_mapper
         self._section_reducer = section_reducer
         self._report_assembler = report_assembler
+        self._evidence_card_pipeline = EvidenceCardPipeline(
+            card_max_tokens=self.config.evidence_card_max_tokens,
+            section_token_budget=self.config.section_evidence_budget,
+            batch_budget_ratio=self.config.batch_budget_ratio,
+            digest_max_tokens=self.config.batch_digest_max_tokens,
+            max_cards_per_section_call=self.config.section_writer.max_evidence_per_call,
+        )
 
     def generate_report(
         self,
@@ -162,6 +197,7 @@ class BaseReporter:
         if (
             cached_payload
             and cached_payload.get("evidence_fingerprint") == evidence_fingerprint
+            and (cached_payload.get("evidence_card_coverage") or {}).get("passed") is True
         ):
             report_result = self._deserialize_report_result(cached_payload)
             self._update_state_report_context(
@@ -174,68 +210,98 @@ class BaseReporter:
             state.update_timestamp()
             return report_result
 
-        plan_summary = self._build_plan_summary(plan)
-        evidence_summary, limited_ids = self._build_evidence_summary(evidence_map)
+        cached_cards = self._load_evidence_card_cache(evidence_map)
+        evidence_cards, card_cache_hits = self._evidence_card_pipeline.build_cards(
+            evidence_map.values(), cached_by_hash=cached_cards,
+        )
+        self._save_evidence_card_cache(evidence_cards)
 
-        outline = self._outline_builder.build_outline(
-            query=plan.problem_statement.original_query,
-            plan_summary=plan_summary,
-            evidence_summary=evidence_summary,
-            evidence_count=len(evidence_map),
-            report_type=resolved_report_type,
+        self._save_stage_checkpoint(
+            report_id, "evidence_cards",
+            {"evidence_fingerprint": evidence_fingerprint, "card_count": len(evidence_cards)},
+        )
+        routing_checkpoint = self._load_stage_checkpoint(report_id, "routing")
+        outline_model_calls = 0
+        if (
+            routing_checkpoint
+            and routing_checkpoint.get("evidence_fingerprint") == evidence_fingerprint
+            and routing_checkpoint.get("outline")
+        ):
+            outline = ReportOutline.model_validate(routing_checkpoint["outline"])
+        else:
+            plan_summary = self._build_plan_summary(plan)
+            evidence_summary = self._build_card_outline_summary(evidence_cards)
+            outline = self._outline_builder.build_outline(
+                query=plan.problem_statement.original_query,
+                plan_summary=plan_summary,
+                evidence_summary=evidence_summary,
+                evidence_count=len(evidence_map),
+                report_type=resolved_report_type,
+            )
+            outline_model_calls = 1
+        outline.sections = outline.sections[: self.config.max_report_sections]
+        routing = self._evidence_card_pipeline.route_cards(evidence_cards, outline)
+        self._save_stage_checkpoint(
+            report_id, "routing",
+            {
+                "evidence_fingerprint": evidence_fingerprint,
+                "outline": outline.model_dump(mode="json"),
+                "routing": routing,
+            },
         )
 
+        expected_report_calls = outline_model_calls + sum(
+            1 for section in outline.sections if routing.get(section.section_id)
+        )
+        if expected_report_calls > self.config.max_report_model_calls:
+            raise RuntimeError(
+                f"报告预计模型调用 {expected_report_calls} 次，超过上限 {self.config.max_report_model_calls}"
+            )
+
         section_cache_index = self._build_section_cache_index(cached_payload)
-        use_mapreduce = self._should_use_mapreduce(evidence_map)
-
-        if use_mapreduce:
-            section_contents, used_evidence_ids = self._generate_sections_mapreduce(
-                outline=outline,
-                evidence_map=evidence_map,
-                section_cache_index=section_cache_index,
-                evidence_fingerprint=evidence_fingerprint,
-                fallback_evidence_ids=limited_ids,
-            )
-            final_report = self._assemble_report_mapreduce(
-                outline=outline,
-                section_contents=section_contents,
-                query=plan.problem_statement.original_query,
-                evidence_count=len(evidence_map),
-            )
-        else:
-            section_contents, used_evidence_ids = self._generate_sections_traditional(
-                outline=outline,
-                evidence_map=evidence_map,
-                section_cache_index=section_cache_index,
-                evidence_fingerprint=evidence_fingerprint,
-                fallback_evidence_ids=limited_ids,
-            )
-            final_report = self._assemble_report(outline, section_contents)
-
-        consistency_result: Optional[ConsistencyCheckResult] = None
-        if self.config.enable_consistency_check and evidence_map:
-            evidence_text = self._format_evidence_for_check(evidence_map.values())
-            try:
-                consistency_result = self._consistency_checker.check(
-                    final_report, evidence_text
-                )
-            except Exception as exc:  # noqa: BLE001
-                _LOGGER.warning("一致性检查失败: %s", exc)
-
-        final_report = self._append_evidence_annex(
-            final_report,
-            evidence_map,
-            used_evidence_ids,
+        section_cache_index.update(self._load_section_checkpoints(report_id, outline))
+        section_contents, used_evidence_ids, evidence_digests = self._generate_sections_from_cards(
+            report_id=report_id,
+            outline=outline,
+            cards=evidence_cards,
+            section_cache_index=section_cache_index,
+            evidence_fingerprint=evidence_fingerprint,
+        )
+        final_report = self._assemble_report(outline, section_contents)
+        annex, annex_ids = self._evidence_card_pipeline.annex(evidence_cards)
+        final_report = f"{final_report}\n\n{annex}".strip()
+        coverage = self._evidence_card_pipeline.coverage(
+            evidence_cards, routing, used_evidence_ids, annex_ids,
+        )
+        consistency_result = ConsistencyCheckResult(
+            is_consistent=bool(final_report.strip() and not has_internal_material(final_report)),
+            issues=[] if coverage["passed"] else [{"kind": "evidence_card_coverage", "missing_ids": coverage["missing_ids"]}],
+            raw_response="deterministic full Evidence Card coverage check",
         )
 
         references = self._format_references(evidence_map, used_evidence_ids)
-
+        report_model_calls = expected_report_calls
+        report_metrics = {
+            "evidence_count": len(evidence_map),
+            "evidence_card_count": len(evidence_cards),
+            "evidence_card_cache_hits": card_cache_hits,
+            "section_count": len(outline.sections),
+            "model_calls": report_model_calls,
+            "max_model_calls": self.config.max_report_model_calls,
+            "section_evidence_budget": self.config.section_evidence_budget,
+            "within_model_call_budget": report_model_calls <= self.config.max_report_model_calls,
+        }
         report_result = ReportResult(
             outline=outline,
             sections=section_contents,
             final_report=final_report,
             references=references,
             consistency_check=consistency_result,
+            evidence_cards=[item.model_dump(mode="json") for item in evidence_cards],
+            evidence_routing=routing,
+            evidence_digests=evidence_digests,
+            evidence_card_coverage=coverage,
+            report_metrics=report_metrics,
         )
 
         self._save_report_cache(
@@ -244,6 +310,15 @@ class BaseReporter:
             report_result,
             outline,
             evidence_map,
+        )
+        self._save_stage_checkpoint(
+            report_id,
+            "final_assembly",
+            {
+                "evidence_fingerprint": evidence_fingerprint,
+                "coverage": coverage,
+                "report_metrics": report_metrics,
+            },
         )
 
         self._update_state_report_context(
@@ -329,6 +404,120 @@ class BaseReporter:
             limited_ids.append(result.result_id)
         summary_text = "\n".join(lines) if lines else "无结构化证据"
         return summary_text, limited_ids
+
+    @staticmethod
+    def _build_card_outline_summary(cards: List[EvidenceCard]) -> str:
+        """Expose every card to outline planning with a deliberately small preview."""
+        if not cards:
+            return "无结构化证据"
+        return "\n".join(
+            f"{card.evidence_id} | 主题:{','.join(card.topics[:4])} | {card.summary[:160]}"
+            for card in cards
+        )
+
+    def _load_evidence_card_cache(
+        self,
+        evidence_map: Dict[str, RetrievalResult],
+    ) -> Dict[str, Dict[str, Any]]:
+        if self._cache_manager is None:
+            return {}
+        cached: Dict[str, Dict[str, Any]] = {}
+        for result in evidence_map.values():
+            content_hash = result.metadata.content_hash
+            if not content_hash:
+                continue
+            payload = self._cache_manager.get(
+                f"evidence-card:v1:{content_hash}", skip_validation=True,
+            )
+            if isinstance(payload, dict):
+                cached[str(content_hash)] = payload
+        return cached
+
+    def _save_evidence_card_cache(self, cards: List[EvidenceCard]) -> None:
+        if self._cache_manager is None:
+            return
+        for card in cards:
+            self._cache_manager.set(
+                f"evidence-card:v1:{card.content_hash}",
+                card.model_dump(mode="json"),
+            )
+
+    def _generate_sections_from_cards(
+        self,
+        *,
+        report_id: str,
+        outline: ReportOutline,
+        cards: List[EvidenceCard],
+        section_cache_index: Dict[str, Dict[str, Any]],
+        evidence_fingerprint: Dict[str, str],
+    ) -> Tuple[List[SectionContent], List[str], Dict[str, List[Dict[str, Any]]]]:
+        """Write each section once from bounded card inputs while processing every card."""
+        cards_by_id = {card.evidence_id: card for card in cards}
+        section_contents: List[SectionContent] = []
+        processed_ids: List[str] = []
+        digest_state: Dict[str, List[Dict[str, Any]]] = {}
+
+        for section in outline.sections:
+            assigned_ids = [item for item in section.evidence_ids if item in cards_by_id]
+            assigned_cards = [cards_by_id[item] for item in assigned_ids]
+            cached_section = section_cache_index.get(section.section_id)
+            if cached_section and self._can_reuse_section(
+                section,
+                cached_section,
+                evidence_fingerprint,
+            ):
+                content = self._sanitize_section_text(section.title, cached_section["content"])
+            elif not assigned_cards:
+                content = "当前章节没有被路由到直接相关的 Evidence Card。"
+            else:
+                prompt_entries, digests = self._evidence_card_pipeline.section_inputs(assigned_cards)
+                digest_state[section.section_id] = [item.model_dump(mode="json") for item in digests]
+                prompt_map = {item.result_id: item for item in prompt_entries}
+                prompt_section = section.model_copy(update={"evidence_ids": list(prompt_map)})
+                prompt_outline = outline.model_copy(
+                    update={
+                        "sections": [
+                            prompt_section if item.section_id == section.section_id else item
+                            for item in outline.sections
+                        ]
+                    }
+                )
+                draft = self._section_writer.write_section(
+                    outline=prompt_outline,
+                    section=prompt_section,
+                    evidence_map=prompt_map,
+                    fallback_evidence_ids=list(prompt_map),
+                )
+                content = self._sanitize_section_text(section.title, draft.content)
+                content = add_inline_citations(content, assigned_ids)
+            section_contents.append(
+                SectionContent(
+                    section_id=section.section_id,
+                    title=section.title,
+                    content=content,
+                    used_evidence_ids=assigned_ids,
+                )
+            )
+            self._save_stage_checkpoint(
+                report_id,
+                f"section:{section.section_id}",
+                {
+                    "section_id": section.section_id,
+                    "title": section.title,
+                    "summary": section.summary,
+                    "content": content,
+                    "used_evidence_ids": assigned_ids,
+                    "evidence_fingerprint": {
+                        evidence_id: evidence_fingerprint.get(evidence_id)
+                        for evidence_id in assigned_ids
+                    },
+                },
+            )
+            for evidence_id in assigned_ids:
+                if evidence_id not in processed_ids:
+                    processed_ids.append(evidence_id)
+
+        return section_contents, processed_ids, digest_state
 
     def _should_use_mapreduce(
         self,
@@ -787,6 +976,30 @@ class BaseReporter:
             return cached
         return None
 
+    def _load_stage_checkpoint(self, report_id: str, stage: str) -> Optional[Dict[str, Any]]:
+        if self._cache_manager is None:
+            return None
+        cached = self._cache_manager.get(
+            f"report-stage:v1:{report_id}:{stage}", skip_validation=True,
+        )
+        return cached if isinstance(cached, dict) else None
+
+    def _save_stage_checkpoint(self, report_id: str, stage: str, payload: Dict[str, Any]) -> None:
+        if self._cache_manager is not None:
+            self._cache_manager.set(f"report-stage:v1:{report_id}:{stage}", payload)
+
+    def _load_section_checkpoints(
+        self,
+        report_id: str,
+        outline: ReportOutline,
+    ) -> Dict[str, Dict[str, Any]]:
+        output: Dict[str, Dict[str, Any]] = {}
+        for section in outline.sections:
+            payload = self._load_stage_checkpoint(report_id, f"section:{section.section_id}")
+            if payload:
+                output[section.section_id] = payload
+        return output
+
     def _build_section_cache_index(
         self,
         cached_payload: Optional[Dict[str, Any]],
@@ -858,6 +1071,11 @@ class BaseReporter:
             ),
             "evidence_fingerprint": evidence_fingerprint,
             "evidence_ids": list(evidence_map.keys()),
+            "evidence_cards": report_result.evidence_cards,
+            "evidence_routing": report_result.evidence_routing,
+            "evidence_digests": report_result.evidence_digests,
+            "evidence_card_coverage": report_result.evidence_card_coverage,
+            "report_metrics": report_result.report_metrics,
         }
 
         try:
@@ -887,6 +1105,11 @@ class BaseReporter:
             final_report=payload.get("final_report", ""),
             references=payload.get("references"),
             consistency_check=consistency,
+            evidence_cards=list(payload.get("evidence_cards", [])),
+            evidence_routing=dict(payload.get("evidence_routing", {})),
+            evidence_digests=dict(payload.get("evidence_digests", {})),
+            evidence_card_coverage=dict(payload.get("evidence_card_coverage", {})),
+            report_metrics=dict(payload.get("report_metrics", {})),
         )
 
     def _update_state_report_context(
@@ -918,6 +1141,11 @@ class BaseReporter:
         )
         context.report_id = report_id
         context.cache_hit = cache_hit
+        context.evidence_cards = list(report_result.evidence_cards)
+        context.evidence_routing = dict(report_result.evidence_routing)
+        context.evidence_digests = dict(report_result.evidence_digests)
+        context.evidence_card_coverage = dict(report_result.evidence_card_coverage)
+        context.report_metrics = dict(report_result.report_metrics)
 
 
 def _extract_tracker_from_state(state: PlanExecuteState) -> Optional[EvidenceTracker]:

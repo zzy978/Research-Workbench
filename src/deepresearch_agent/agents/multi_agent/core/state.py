@@ -153,6 +153,27 @@ class ReportContext(BaseModel):
         description="是否命中了报告缓存"
     )
 
+    evidence_cards: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="当前 Run 的全量 Evidence Card，可随 Checkpoint 恢复",
+    )
+    evidence_routing: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        description="章节到 Evidence ID 的全量路由",
+    )
+    evidence_digests: Dict[str, List[Dict[str, Any]]] = Field(
+        default_factory=dict,
+        description="超出章节预算时生成的分层 Digest",
+    )
+    evidence_card_coverage: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Evidence Ledger/Card/路由/处理/附录覆盖结果",
+    )
+    report_metrics: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="报告阶段调用数、上下文规模与缓存指标",
+    )
+
     # 创建时间
     created_at: datetime = Field(default_factory=datetime.now)
 

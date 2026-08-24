@@ -14,7 +14,17 @@ from deepresearch_agent.agents.multi_agent.orchestrator import MultiAgentOrchest
 from deepresearch_agent.agents.multi_agent.planner.base_planner import PlannerResult
 from deepresearch_agent.agents.multi_agent.reporter.base_reporter import ReportResult, SectionContent
 from deepresearch_agent.agents.multi_agent.reporter.consistency_checker import ConsistencyCheckResult
+from deepresearch_agent.agents.multi_agent.reporter.evidence_cards import EvidenceCardPipeline
 from deepresearch_agent.agents.multi_agent.reporter.outline_builder import ReportOutline, SectionOutline
+from deepresearch_agent.config.settings import (
+    EVIDENCE_CARD_MAX_TOKENS,
+    REPORT_BATCH_BUDGET_RATIO,
+    REPORT_BATCH_DIGEST_MAX_TOKENS,
+    REPORT_MAX_SECTIONS,
+    REPORT_RESERVED_TOKENS,
+    REPORT_SECTION_EVIDENCE_BUDGET,
+    VERIFICATION_RESERVED_TOKENS,
+)
 
 from .run_context import RunContext
 from .report_safety import add_inline_citations, citation_evidence_ids, has_internal_material, rank_evidence, sanitize_report
@@ -29,6 +39,8 @@ class WorkflowDriver(Protocol):
     def execution_records(self) -> list[ExecutionRecord]: ...
     def evidence_results(self) -> list[tuple[str | None, str | None, str, RetrievalResult]]: ...
     def report_consistency(self) -> bool | None: ...
+    def evidence_card_coverage(self) -> dict[str, Any] | None: ...
+    def report_metrics(self) -> dict[str, Any]: ...
     def plan_record(self) -> tuple[dict[str, Any], list[dict[str, Any]]] | None: ...
 
 
@@ -126,7 +138,20 @@ class PlanExecuteReportDriver:
     async def execute(self) -> None:
         if self.planner_result is None:
             raise RuntimeError("缺少 PlannerResult")
-        records = await asyncio.to_thread(self.orchestrator.execute, self.state, self.planner_result)
+        execution_token_ceiling = max(
+            0,
+            self.context.budget_limits.max_llm_tokens
+            - REPORT_RESERVED_TOKENS
+            - VERIFICATION_RESERVED_TOKENS,
+        )
+        records = await asyncio.to_thread(
+            self.orchestrator.execute,
+            self.state,
+            self.planner_result,
+            stop_predicate=lambda: (
+                self.context.budget_usage.llm_tokens >= execution_token_ceiling
+            ),
+        )
         existing = {item.record_id for item in self.state.execution_records}
         self.state.execution_records.extend(item for item in records if item.record_id not in existing)
 
@@ -135,13 +160,117 @@ class PlanExecuteReportDriver:
             self._repair_pending = False
         elif self._uses_compact_report():
             self.report_result = self._build_compact_report()
+        elif self._requires_reserved_budget_fallback():
+            self.report_result = self._build_reserved_budget_report()
         else:
-            self.report_result = await asyncio.to_thread(self.orchestrator.report, self.state)
+            report_type = str(self.context.config_snapshot.get("report_type") or "long_document")
+            self.report_result = await asyncio.to_thread(
+                self.orchestrator.report,
+                self.state,
+                report_type=report_type,
+            )
         self.report_result.final_report = sanitize_report(self.report_result.final_report)
         evidence_ids = citation_evidence_ids([result for _, _, _, result in self.evidence_results()])
         self.report_result.final_report = add_inline_citations(self.report_result.final_report, evidence_ids)
         self.state.response = self.report_result.final_report
         return self.report_result.final_report
+
+    def _requires_reserved_budget_fallback(self) -> bool:
+        remaining = (
+            self.context.budget_limits.max_llm_tokens
+            - self.context.budget_usage.llm_tokens
+        )
+        return remaining < REPORT_RESERVED_TOKENS + VERIFICATION_RESERVED_TOKENS
+
+    def _build_reserved_budget_report(self) -> ReportResult:
+        """Finish with all evidence, without another model call, when reserves are low."""
+        evidence_by_id: dict[str, RetrievalResult] = {}
+        for _, _, _, result in self.evidence_results():
+            evidence_by_id[result.result_id] = result
+        evidence = list(evidence_by_id.values())
+        pipeline = EvidenceCardPipeline(
+            card_max_tokens=EVIDENCE_CARD_MAX_TOKENS,
+            section_token_budget=REPORT_SECTION_EVIDENCE_BUDGET,
+            batch_budget_ratio=REPORT_BATCH_BUDGET_RATIO,
+            digest_max_tokens=REPORT_BATCH_DIGEST_MAX_TOKENS,
+        )
+        cards, _ = pipeline.build_cards(evidence)
+        plan = self.planner_result.plan_spec if self.planner_result else None
+        nodes = list(plan.task_graph.nodes)[:REPORT_MAX_SECTIONS] if plan else []
+        sections = [
+            SectionOutline(
+                section_id=f"reserved_{index}",
+                title=str(node.description or f"研究发现 {index}")[:80],
+                summary=str(node.description or "证据支持的研究发现")[:240],
+            )
+            for index, node in enumerate(nodes, 1)
+        ]
+        if not sections:
+            sections = [SectionOutline(
+                section_id="reserved_findings",
+                title="证据支持的研究发现",
+                summary="按全量 Evidence Card 呈现研究发现",
+            )]
+        outline = ReportOutline(
+            report_type="long_document",
+            title="研究报告（预算保护模式）",
+            abstract="执行阶段已接近预留边界，报告以确定性 Evidence Card 形式完整交付。",
+            sections=sections,
+        )
+        routing = pipeline.route_cards(cards, outline)
+        section_contents: list[SectionContent] = []
+        processed_ids: list[str] = []
+        cards_by_id = {card.evidence_id: card for card in cards}
+        for section in outline.sections:
+            assigned = routing.get(section.section_id, [])
+            lines: list[str] = []
+            for evidence_id in assigned:
+                card = cards_by_id[evidence_id]
+                claim = card.claims[0] if card.claims else card.summary
+                lines.append(f"- {claim} [{evidence_id}]")
+                if card.conflict_findings:
+                    lines.append(
+                        f"  - 冲突或不一致：{'；'.join(card.conflict_findings)} [{evidence_id}]"
+                    )
+                if card.limitations:
+                    lines.append(f"  - 局限：{'；'.join(card.limitations)} [{evidence_id}]")
+            content = "\n".join(lines) or "当前章节没有被路由到直接相关的 Evidence Card。"
+            section_contents.append(SectionContent(
+                section_id=section.section_id,
+                title=section.title,
+                content=content,
+                used_evidence_ids=assigned,
+            ))
+            processed_ids.extend(assigned)
+        report_parts = [f"# {outline.title}", outline.abstract or ""]
+        for section, content in zip(outline.sections, section_contents):
+            report_parts.extend([f"## {section.title}", content.content])
+        annex, annex_ids = pipeline.annex(cards)
+        report_parts.append(annex)
+        final_report = "\n\n".join(part for part in report_parts if part).strip()
+        coverage = pipeline.coverage(cards, routing, processed_ids, annex_ids)
+        return ReportResult(
+            outline=outline,
+            sections=section_contents,
+            final_report=final_report,
+            consistency_check=ConsistencyCheckResult(
+                is_consistent=bool(final_report.strip() and not has_internal_material(final_report)),
+                raw_response="deterministic reserved-budget Evidence Card report",
+            ),
+            evidence_cards=[card.model_dump(mode="json") for card in cards],
+            evidence_routing=routing,
+            evidence_card_coverage=coverage,
+            report_metrics={
+                "evidence_count": len(evidence),
+                "evidence_card_count": len(cards),
+                "model_calls": 0,
+                "reserved_budget_fallback": True,
+                "remaining_tokens_at_entry": (
+                    self.context.budget_limits.max_llm_tokens
+                    - self.context.budget_usage.llm_tokens
+                ),
+            },
+        )
 
     def _uses_compact_report(self) -> bool:
         plan = self.planner_result.plan_spec if self.planner_result else None
@@ -215,7 +344,7 @@ class PlanExecuteReportDriver:
     async def repair_report(self, failures: list[str]) -> bool:
         if self.report_result is None:
             return False
-        supported = {"citation_integrity", "required_section", "report_consistency", "source_diversity"}
+        supported = {"citation_integrity", "required_section", "report_consistency", "source_diversity", "evidence_card_coverage"}
         if not set(failures).issubset(supported):
             return False
         report = self.report_result.final_report
@@ -240,10 +369,21 @@ class PlanExecuteReportDriver:
                     raw_response=None,
                 )
             self.report_result.consistency_check = consistency
+            if self.report_result.evidence_cards:
+                from deepresearch_agent.agents.multi_agent.reporter.evidence_cards import EvidenceCardPipeline, EvidenceCard
+                cards = [EvidenceCard.model_validate(item) for item in self.report_result.evidence_cards]
+                annex, _ = EvidenceCardPipeline.annex(cards)
+                report = f"{report}\n\n{annex}".strip()
         if "required_section" in failures and not report.lstrip().startswith("#"):
             report = "# 研究报告\n\n" + report
         if "source_diversity" in failures and "局限" not in report:
             report += "\n\n## 局限\n\n当前证据来源数量有限，结论应结合更多独立来源复核。"
+        if "evidence_card_coverage" in failures and self.report_result.evidence_cards:
+            from deepresearch_agent.agents.multi_agent.reporter.evidence_cards import EvidenceCardPipeline, EvidenceCard
+            cards = [EvidenceCard.model_validate(item) for item in self.report_result.evidence_cards]
+            annex, _ = EvidenceCardPipeline.annex(cards)
+            report = re.sub(r"(?ms)^## 全量证据索引\s*.*$", "", report).rstrip()
+            report = f"{report}\n\n{annex}"
         self.report_result.final_report = report
         self.state.response = report
         self._repair_pending = True
@@ -276,6 +416,16 @@ class PlanExecuteReportDriver:
         if self.report_result.consistency_check is None:
             return bool(self.report_result.final_report.strip())
         return self.report_result.consistency_check.is_consistent
+
+    def evidence_card_coverage(self) -> dict[str, Any] | None:
+        if self.report_result is not None and self.report_result.evidence_card_coverage:
+            return dict(self.report_result.evidence_card_coverage)
+        if self.state.report_context and self.state.report_context.evidence_card_coverage:
+            return dict(self.state.report_context.evidence_card_coverage)
+        return None
+
+    def report_metrics(self) -> dict[str, Any]:
+        return dict(self.report_result.report_metrics) if self.report_result else {}
 
     def plan_record(self) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
         if self.planner_result is None or self.planner_result.plan_spec is None:
@@ -468,6 +618,12 @@ class DeepResearchDriver:
 
     def report_consistency(self) -> bool | None:
         return bool(self._report and self._report.strip()) and not has_internal_material(self._report)
+
+    def evidence_card_coverage(self) -> dict[str, Any] | None:
+        return None
+
+    def report_metrics(self) -> dict[str, Any]:
+        return {}
 
     def plan_record(self) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
         if not self._plan:

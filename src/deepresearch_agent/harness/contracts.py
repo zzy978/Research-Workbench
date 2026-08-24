@@ -68,7 +68,7 @@ class EvidenceData(BaseModel):
 class ContractCheckData(BaseModel):
     check_id: str
     run_id: str
-    kind: Literal["min_evidence", "source_match", "citation_integrity", "claim_support", "report_consistency", "required_section", "source_diversity", "custom"]
+    kind: Literal["min_evidence", "source_match", "citation_integrity", "claim_support", "report_consistency", "required_section", "source_diversity", "evidence_card_coverage", "custom"]
     required: bool = True
     threshold: Optional[float] = None
     verifier: str
@@ -103,6 +103,7 @@ class ContractEvaluator:
         min_evidence: int = 1,
         required_sections: Optional[List[str]] = None,
         consistency_passed: Optional[bool] = None,
+        evidence_card_coverage: Optional[Dict[str, Any]] = None,
     ) -> ContractVerdict:
         from .verifiers import DeterministicVerifiers
 
@@ -121,13 +122,23 @@ class ContractEvaluator:
             verifier.report_consistency(consistency_passed),
             verifier.source_diversity(),
         ]
+        if evidence_card_coverage is not None:
+            # The immutable ledger is authoritative; never accept reporter-provided
+            # ledger IDs as proof of its own completeness.
+            coverage = dict(evidence_card_coverage)
+            coverage["ledger_ids"] = [
+                str(item.get("evidence_id", "") if isinstance(item, dict) else getattr(item, "evidence_id", ""))
+                for item in evidence
+                if str(item.get("evidence_id", "") if isinstance(item, dict) else getattr(item, "evidence_id", ""))
+            ]
+            checks.append(verifier.evidence_card_coverage(coverage))
         if self.repository is not None:
             for check in checks:
                 await self.repository.upsert(check)
         failures = [check.kind for check in checks if check.required and check.passed is not True]
         locally_repairable = {
             "min_evidence", "citation_integrity", "required_section", "claim_support",
-            "report_consistency", "source_diversity", "source_match",
+            "report_consistency", "source_diversity", "source_match", "evidence_card_coverage",
         }
         return ContractVerdict(
             passed=not failures,

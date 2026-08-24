@@ -88,6 +88,47 @@ class DeterministicVerifiers:
         passed = len(sources) >= 2 or (bool(sources) and limitation)
         return self._check("source_diversity", passed, expected="至少两个独立来源，或明确披露单一来源局限", observed={"sources": sorted(sources), "limitation_disclosed": limitation}, explanation="来源不足不得伪造多样性")
 
+    def evidence_card_coverage(self, coverage: dict[str, Any]) -> ContractCheckData:
+        ledger_ids = set(coverage.get("ledger_ids") or [])
+        card_ids = set(coverage.get("card_ids") or [])
+        routed_ids = set(coverage.get("routed_ids") or [])
+        processed_ids = set(coverage.get("processed_ids") or [])
+        annex_ids = set(coverage.get("annex_ids") or [])
+        report_ids = set(_CITATION.findall(self.report))
+        missing = {
+            "cards": sorted(ledger_ids - card_ids),
+            "routed": sorted(ledger_ids - routed_ids),
+            "processed": sorted(ledger_ids - processed_ids),
+            "annex": sorted(ledger_ids - annex_ids),
+            "report": sorted(ledger_ids - report_ids),
+        }
+        exact_sets = (
+            ledger_ids == card_ids == routed_ids == processed_ids == annex_ids
+        )
+        reported_card_count = int(coverage.get("card_count", len(card_ids)) or 0)
+        passed = (
+            bool(ledger_ids)
+            and exact_sets
+            and reported_card_count == len(ledger_ids)
+            and all(not values for values in missing.values())
+        )
+        return self._check(
+            "evidence_card_coverage",
+            passed,
+            expected="Ledger/Card/路由/处理/附录/报告引用的 Evidence ID 集合完全一致",
+            observed={
+                "ledger_count": len(ledger_ids),
+                "card_count": reported_card_count,
+                "unique_card_count": len(card_ids),
+                "routed_count": len(routed_ids),
+                "processed_count": len(processed_ids),
+                "annex_count": len(annex_ids),
+                "report_reference_count": len(report_ids & ledger_ids),
+                "missing_by_stage": missing,
+            },
+            explanation="全量 Evidence Card 覆盖门禁禁止任何证据被静默丢弃",
+        )
+
     def _claim_lines(self) -> list[str]:
         claims: list[str] = []
         excluded_section = False

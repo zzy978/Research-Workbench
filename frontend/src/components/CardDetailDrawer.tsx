@@ -158,7 +158,7 @@ export function CardDetailDrawer({ stageId, run, feed, report, evidence, context
 
       {stageId === "verifying" && (
         <div className="drawer-body">
-          <p className="drawer-desc">按 7 项完成门禁逐项核查报告可信度；报告问题进入定向修复，证据问题返回规划检索，超过预算后才结束。</p>
+          <p className="drawer-desc">逐项核查报告可信度与全量证据覆盖；报告问题进入定向修复，证据问题返回规划检索，超过预算后才结束。</p>
           <div className="verification-chips">
             {feed.verification.length === 0 && <span className="pending">检查中…</span>}
             {feed.verification.map((check) => (

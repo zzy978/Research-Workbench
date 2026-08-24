@@ -27,12 +27,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "docs/HERMES_INSPIRED_LOCAL_MVP_DESIGN.md",
+                "file": "docs/TECHNICAL_DOCUMENTATION.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "HERMES_INSPIRED_LOCAL_MVP_DESIGN"
+              "title": "TECHNICAL_DOCUMENTATION"
             }
           }
         ],
@@ -176,7 +176,7 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "docs/HERMES_INSPIRED_LOCAL_MVP_DESIGN.md",
+                "file": "docs/TECHNICAL_DOCUMENTATION.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
@@ -205,19 +205,24 @@
   },
   "active": "6369b417cd8f8e56",
   "lastOpenFiles": [
-    "data/artifacts/run_757505666acc45e9b2512656470e3c4c/report/final.md",
-    "data/artifacts/run_757505666acc45e9b2512656470e3c4c/report",
-    "data/artifacts/run_757505666acc45e9b2512656470e3c4c",
-    "tests/models/__pycache__/test_prefix_cache.cpython-310-pytest-8.4.2.pyc.22888",
-    "tests/models/test_prefix_cache.py.tmp.20156.3e1de1b0f362",
-    "src/deepresearch_agent/models/prefix_cache.py.tmp.20156.fa4de8f78bd0",
-    "frontend/vite.config.ts.timestamp-1786885418813-9d33e9c7a725e8.mjs",
-    "tests/models/test_prefix_cache.py.tmp.20156.3ff4fd4e0c90",
-    "src/deepresearch_agent/models/prefix_cache.py.tmp.20156.107c2244a4fa",
-    "frontend/vite.config.ts.timestamp-1786884006169-a3998bbc2b06d.mjs",
+    "data/app.db-shm",
+    "data/app.db-wal",
     "frontend/dist/index.html",
-    "docs/HERMES_INSPIRED_LOCAL_MVP_DEVELOPMENT_EXECUTION_PLAN.md",
+    "frontend/dist/assets/index-CSHmHAFi.css",
+    "frontend/dist/assets/index-Bzcdcb2r.js",
+    "frontend/dist/assets",
+    "docs/MEMORY_CONTEXT_ENGINEERING_IMPROVEMENT_PLAN.md",
+    "frontend/vite.config.ts.timestamp-1787451075907-694644c93fe368.mjs",
+    "data/artifacts/run_b24039239e4e42f79a343338e81b6079/report/final.md",
+    "data/artifacts/run_b24039239e4e42f79a343338e81b6079/report",
+    "data/artifacts/run_b24039239e4e42f79a343338e81b6079/tavily/call_e8334789eb3e4d27ab789b4f48cfde8f.json",
+    "cache/tavily/772d0e026fde08830b2cb496c888c23ef75d9bee2907508731d3778414a68171.json",
+    "cache/tavily/772d0e026fde08830b2cb496c888c23ef75d9bee2907508731d3778414a68171.1787450520160372755.tmp",
+    "data/artifacts/run_2263df568a6f4fcab47da7407f44cacd/report/final.md",
     "docs/TECHNICAL_DOCUMENTATION.md",
+    "docs/HERMES_INSPIRED_LOCAL_MVP_DEVELOPMENT_EXECUTION_PLAN.md",
+    "docs/HERMES_INSPIRED_LOCAL_MVP_DESIGN.md",
+    "data/artifacts/run_757505666acc45e9b2512656470e3c4c/report/final.md",
     "skills/research/research-web-1123cbd3/0.1.0/SKILL.md",
     "data/artifacts/run_393395424bac4d8d9a038b62d50f6f67/report/final.md",
     "data/artifacts/run_473ea5c333bf49e0a14eb0666cde0848/report/final.md",
@@ -236,11 +241,6 @@
     "data/artifacts/run_069d4c669f9a4e1cb9e65ce0f5cabdc7/report/final.md",
     "frontend/node_modules/semver/README.md",
     "frontend/node_modules/react-router/CHANGELOG.md",
-    "frontend/node_modules/react-router/README.md",
-    "frontend/node_modules/react-router/LICENSE.md",
-    "frontend/node_modules/react-refresh/README.md",
-    "frontend/node_modules/parse-entities/readme.md",
-    "frontend/node_modules/json5/README.md",
     "data/acceptance/ui/04_status.png",
     "data/acceptance/ui/03_run_done.png",
     "data/acceptance/ui/02_new_session.png",
