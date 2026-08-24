@@ -256,6 +256,15 @@ class BaseReporter:
         state.update_timestamp()
         return report_result
 
+    def recheck_consistency(
+        self,
+        report_content: str,
+        evidence_entries: Iterable[RetrievalResult],
+    ) -> ConsistencyCheckResult:
+        """Run the same consistency gate against a repaired report."""
+        evidence_text = self._format_evidence_for_check(evidence_entries)
+        return self._consistency_checker.check(report_content, evidence_text)
+
     def _collect_evidence(
         self,
         state: PlanExecuteState,

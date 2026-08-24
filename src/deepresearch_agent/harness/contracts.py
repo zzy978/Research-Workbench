@@ -125,7 +125,10 @@ class ContractEvaluator:
             for check in checks:
                 await self.repository.upsert(check)
         failures = [check.kind for check in checks if check.required and check.passed is not True]
-        locally_repairable = {"min_evidence", "citation_integrity", "required_section", "claim_support", "source_diversity"}
+        locally_repairable = {
+            "min_evidence", "citation_integrity", "required_section", "claim_support",
+            "report_consistency", "source_diversity", "source_match",
+        }
         return ContractVerdict(
             passed=not failures,
             recoverable=bool(failures) and set(failures).issubset(locally_repairable),

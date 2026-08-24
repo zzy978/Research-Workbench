@@ -14,6 +14,12 @@ export interface IterationEntry {
 export interface ToolEntry { tool_name: string; query?: string; result_count?: number; task_id?: string }
 /** 计划任务（plan.created/revised 增强 payload） */
 export interface PlanTask { task_id: string; task_type: string; description: string }
+export interface RecoveryInfo {
+  action: "repair_report" | "replan" | "fail" | "complete";
+  attempt?: number;
+  maxAttempts?: number;
+  attemptsExhausted: boolean;
+}
 
 export interface StageFeed {
   iterations: IterationEntry[];
@@ -31,6 +37,7 @@ export interface StageFeed {
   reportChars?: number;
   verifyFailures: Array<{ kind: string; message?: string }>;
   verification: Report["verification"];
+  recovery?: RecoveryInfo;
 }
 
 const numberOr = (value: unknown, fallback = 0): number => (typeof value === "number" ? value : fallback);
@@ -106,6 +113,9 @@ function parseTools(events: RunEvent[]): ToolEntry[] {
 /** 从事件流派生出画板各阶段卡片所需的全部中间数据 */
 export function deriveStageFeed(events: RunEvent[], report?: Report | null): StageFeed {
   const iterations = parseIterations(events);
+  const planTasks = parsePlanTasks(events);
+  const currentPlanTaskIds = new Set(planTasks.map((task) => task.task_id));
+  const isCurrentPlanTask = (event: RunEvent) => currentPlanTaskIds.size === 0 || currentPlanTaskIds.has(stringOr(event.task_id));
   // 完成态：含 answer 事件自己的 index（其值为已完成轮数，会多出一位）
   const completedIndexes = new Set(
     events.filter((event) => event.event_type === "iteration.completed").map((event) => numberOr(event.iteration_index))
@@ -136,25 +146,41 @@ export function deriveStageFeed(events: RunEvent[], report?: Report | null): Sta
     };
   }
 
-  const verifyEvent = events.find((event) => event.event_type === "verification.completed");
+  const verifyEvent = [...events].reverse().find((event) => event.event_type === "verification.completed");
   const verifyFailures = Array.isArray(verifyEvent?.failures)
-    ? (verifyEvent!.failures as Array<{ kind: string; message?: string }>)
+    ? (verifyEvent!.failures as unknown[]).map((failure) => (
+        typeof failure === "string"
+          ? { kind: failure }
+          : { kind: stringOr((failure as { kind?: unknown }).kind), message: typeof (failure as { message?: unknown }).message === "string" ? String((failure as { message?: unknown }).message) : undefined }
+      ))
     : [];
+  const action = stringOr(verifyEvent?.recovery_action);
+  const rawAttempt = typeof verifyEvent?.attempt === "number" ? verifyEvent.attempt : undefined;
+  const maxAttempts = typeof verifyEvent?.max_attempts === "number" ? verifyEvent.max_attempts : undefined;
+  const recovery = ["repair_report", "replan", "fail", "complete"].includes(action)
+    ? {
+        action: action as RecoveryInfo["action"],
+        attempt: rawAttempt != null && maxAttempts != null ? Math.min(rawAttempt, maxAttempts) : rawAttempt,
+        maxAttempts,
+        attemptsExhausted: verifyEvent?.attempts_exhausted === true || (rawAttempt != null && maxAttempts != null && rawAttempt > maxAttempts),
+      }
+    : undefined;
 
-  const reportEvent = events.find((event) => event.event_type === "report.completed");
+  const reportEvent = [...events].reverse().find((event) => event.event_type === "report.completed");
 
   return {
     iterations,
     runningIteration,
     liveSearches,
-    planTasks: parsePlanTasks(events),
+    planTasks,
     tools: parseTools(events),
     contextCount: new Set(events.filter((event) => event.event_type === "evidence.added").map((event) => stringOr(event.evidence_id))).size,
-    taskCount: new Set(events.filter((event) => event.event_type === "task.completed").map((event) => stringOr(event.task_id))).size,
-    taskStartedCount: new Set(events.filter((event) => event.event_type === "task.started").map((event) => stringOr(event.task_id))).size,
+    taskCount: new Set(events.filter((event) => event.event_type === "task.completed" && isCurrentPlanTask(event)).map((event) => stringOr(event.task_id))).size,
+    taskStartedCount: new Set(events.filter((event) => event.event_type === "task.started" && isCurrentPlanTask(event)).map((event) => stringOr(event.task_id))).size,
     contextInfo,
     reportChars: typeof reportEvent?.characters === "number" ? reportEvent.characters : undefined,
     verifyFailures,
     verification: report?.verification ?? [],
+    recovery,
   };
 }

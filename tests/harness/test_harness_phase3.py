@@ -14,6 +14,7 @@ from deepresearch_agent.harness.evidence import EvidenceLedger
 from deepresearch_agent.harness.run_context import RunContext
 from deepresearch_agent.harness.runtime import HarnessRuntime
 from deepresearch_agent.harness.errors import AppError, ErrorCode
+from deepresearch_agent.harness.recovery import classify_verification_failures
 from deepresearch_agent.harness.state_machine import InvalidTransition, StateMachine
 from deepresearch_agent.persistence import ArtifactStore, Database
 from deepresearch_agent.persistence.repositories import (
@@ -35,6 +36,7 @@ async def create_run(
     database, *, budget=None,
     source_mode=SourceMode.GRAPHRAG,
     workflow_mode=WorkflowMode.DEEP_RESEARCH,
+    min_evidence=1,
 ):
     session = await SessionRepository(database).create(SessionCreate(title="stage3"))
     message, run, _ = await RunRepository(database).create_for_user_message(
@@ -42,7 +44,7 @@ async def create_run(
         RunCreate(
             session_id=session.session_id, trigger_message_id="atomic",
             source_mode=source_mode, workflow_mode=workflow_mode,
-            config_snapshot={"min_evidence": 1}, budget=budget or BudgetLimits().model_dump(),
+            config_snapshot={"min_evidence": min_evidence}, budget=budget or BudgetLimits().model_dump(),
         ),
     )
     return message, run
@@ -132,6 +134,79 @@ class RetryOnceDriver(FakeDriver):
         await super().execute()
 
 
+class ConsistencyRepairDriver(FakeDriver):
+    async def repair_report(self, failures):
+        if "report_consistency" not in failures:
+            return await super().repair_report(failures)
+        self.repaired = True
+        return True
+
+    def report_consistency(self):
+        return self.repaired
+
+
+class NeverConsistentDriver(FakeDriver):
+    async def repair_report(self, failures):
+        self.repaired = True
+        return True
+
+    def report_consistency(self):
+        return False
+
+
+class ZeroEvidenceDriver(FakeDriver):
+    execute_calls = 0
+    report_calls = 0
+
+    def __init__(self, context):
+        super().__init__(context)
+        self.results = []
+        self.zero_executions = int(context.workflow_state.get("zero_executions", 0))
+
+    async def execute(self):
+        type(self).execute_calls += 1
+        self.zero_executions += 1
+
+    async def report(self):
+        type(self).report_calls += 1
+        return "# 不应生成"
+
+    def snapshot(self):
+        return {"zero_executions": self.zero_executions, "results": []}
+
+    def execution_records(self):
+        index = self.zero_executions
+        return [ExecutionRecord(
+            task_id=f"task-{self.context.run_id}-{index}",
+            session_id=self.context.session_id,
+            worker_type="fake",
+            tool_calls=[ToolCall(
+                tool_name=self.tool_name,
+                tool_call_id=f"call-{self.context.run_id}-{index}",
+                source_mode=self.mode,
+                args={"query": "no-match"},
+                result={"ok": True},
+            )],
+            evidence=[],
+            metadata=ExecutionMetadata(worker_type="fake", tool_calls_count=1, evidence_count=0),
+        )]
+
+    def evidence_results(self):
+        return []
+
+    def plan_record(self):
+        next_index = self.zero_executions + 1
+        task_id = f"task-{self.context.run_id}-{next_index}"
+        tasks = [{
+            "task_id": task_id,
+            "task_type": "local_search",
+            "source_mode": self.mode,
+            "status": "pending",
+            "description": "no evidence probe",
+        }]
+        return ({"plan_id": f"plan-{self.context.run_id}-{next_index}", "status": "executing", "tasks": tasks}, tasks)
+
+
 def build_runtime(database, tmp_path, factory, *, prefix_tracker=None):
     return HarnessRuntime(
         run_repository=RunRepository(database), message_repository=MessageRepository(database),
@@ -150,6 +225,13 @@ def test_state_machine_rejects_illegal_and_unverified_completion():
     with pytest.raises(InvalidTransition):
         machine.validate(RunStatus.VERIFYING, RunStatus.COMPLETED)
     machine.validate(RunStatus.VERIFYING, RunStatus.COMPLETED, contract_passed=True)
+
+
+def test_verification_failure_routing_is_complete():
+    assert classify_verification_failures(["report_consistency"]).action == "repair_report"
+    assert classify_verification_failures(["citation_integrity"]).action == "repair_report"
+    assert classify_verification_failures(["source_match"]).action == "replan"
+    assert classify_verification_failures(["claim_support", "report_consistency"]).action == "replan"
 
 
 def test_budget_manager_enforces_tool_retry_and_replan_limits(monkeypatch):
@@ -179,8 +261,21 @@ def test_budget_manager_enforces_tool_retry_and_replan_limits(monkeypatch):
     ticks = iter((100.0, 102.0))
     monkeypatch.setattr(budget_module.time, "monotonic", lambda: next(ticks))
     manager = BudgetManager(BudgetLimits(wall_time_seconds=1))
-    with pytest.raises(BudgetExceeded):
+    with pytest.raises(BudgetExceeded) as exc_info:
         manager.assert_available()
+    assert str(exc_info.value) == "预算耗尽: wall_time_seconds=2.00 超过上限 1"
+    assert BudgetLimits().wall_time_seconds == 1800
+    assert BudgetLimits().max_llm_tokens == 200000
+    ticks = iter((2000.0, 2900.42))
+    monkeypatch.setattr(budget_module.time, "monotonic", lambda: next(ticks))
+    manager = BudgetManager(BudgetLimits())
+    manager.assert_available()
+    assert manager.usage.elapsed_seconds == pytest.approx(900.42)
+    ticks = iter((3000.0, 3000.1))
+    monkeypatch.setattr(budget_module.time, "monotonic", lambda: next(ticks))
+    manager = BudgetManager(BudgetLimits())
+    manager.observe_tokens(102142)
+    assert manager.usage.llm_tokens == 102142
 
 
 def test_token_usage_total_does_not_double_count_provider_total():
@@ -279,6 +374,86 @@ async def test_citation_failure_is_locally_repaired_with_bounded_retry(database,
     events = await EventRepository(database).list_after(run.run_id)
     assert any(event.event_type == "run.retrying" for event in events)
     assert json.loads((await RunRepository(database).get(run.run_id)).usage_json)["usage"]["task_retries"] == 1
+
+
+@pytest.mark.asyncio
+async def test_report_consistency_failure_repairs_then_reverifies(database, tmp_path):
+    _, run = await create_run(database)
+    result = await build_runtime(database, tmp_path, lambda ctx, events=None: ConsistencyRepairDriver(ctx)).execute_run(run.run_id)
+    assert result.status is RunStatus.COMPLETED
+    events = await EventRepository(database).list_after(run.run_id)
+    retry = next(event for event in events if event.event_type == "run.retrying")
+    retry_payload = json.loads(retry.payload_json)
+    assert retry_payload["recovery_action"] == "repair_report"
+    assert retry_payload["attempt"] == 1
+    verification_payloads = [json.loads(event.payload_json) for event in events if event.event_type == "verification.completed"]
+    assert [item["passed"] for item in verification_payloads] == [False, True]
+
+
+@pytest.mark.asyncio
+async def test_report_consistency_exhaustion_fails_with_clear_reason(database, tmp_path):
+    _, run = await create_run(database, budget=BudgetLimits(max_task_retries=2).model_dump())
+    result = await build_runtime(database, tmp_path, lambda ctx, events=None: NeverConsistentDriver(ctx)).execute_run(run.run_id)
+    assert result.status is RunStatus.FAILED
+    stored = await RunRepository(database).get(run.run_id)
+    assert "自动修复 2 次后仍未通过" in stored.error_message
+    events = await EventRepository(database).list_after(run.run_id)
+    verification_payloads = [json.loads(event.payload_json) for event in events if event.event_type == "verification.completed"]
+    assert verification_payloads[-1]["attempts_exhausted"] is True
+    assert verification_payloads[-1]["attempt"] == verification_payloads[-1]["max_attempts"] == 2
+    assert json.loads(stored.usage_json)["usage"]["task_retries"] == 2
+
+
+@pytest.mark.asyncio
+async def test_zero_evidence_replans_once_then_fails_fast_without_report(database, tmp_path):
+    ZeroEvidenceDriver.execute_calls = 0
+    ZeroEvidenceDriver.report_calls = 0
+    _, run = await create_run(
+        database,
+        budget=BudgetLimits(max_replans=2).model_dump(),
+        source_mode=SourceMode.GRAPHRAG,
+        workflow_mode=WorkflowMode.PLAN_EXECUTE_REPORT,
+    )
+    result = await build_runtime(database, tmp_path, lambda ctx, events=None: ZeroEvidenceDriver(ctx)).execute_run(run.run_id)
+
+    assert result.status is RunStatus.FAILED
+    assert result.budget_usage.replans == 1
+    assert ZeroEvidenceDriver.execute_calls == 2
+    assert ZeroEvidenceDriver.report_calls == 0
+    stored = await RunRepository(database).get(run.run_id)
+    assert stored.error_code == "NO_SOURCE_EVIDENCE"
+    assert "导入与该主题相关的私域资料" in stored.error_message
+    events = await EventRepository(database).list_after(run.run_id)
+    names = [event.event_type for event in events]
+    assert names.count("source.coverage_checked") == 2
+    assert names.count("plan.replanning") == 1
+    assert "report.completed" not in names
+
+
+@pytest.mark.asyncio
+async def test_insufficient_evidence_for_detailed_report_fails_before_reporting(database, tmp_path):
+    FakeDriver.report_calls = 0
+    _, run = await create_run(
+        database,
+        budget=BudgetLimits(max_replans=2).model_dump(),
+        source_mode=SourceMode.GRAPHRAG,
+        workflow_mode=WorkflowMode.PLAN_EXECUTE_REPORT,
+        min_evidence=3,
+    )
+    result = await build_runtime(database, tmp_path, lambda ctx, events=None: FakeDriver(ctx)).execute_run(run.run_id)
+
+    assert result.status is RunStatus.FAILED
+    assert result.budget_usage.replans == 1
+    assert FakeDriver.report_calls == 0
+    stored = await RunRepository(database).get(run.run_id)
+    assert stored.error_code == "INSUFFICIENT_SOURCE_EVIDENCE"
+    assert "低于本报告所需的 3 条" in stored.error_message
+    events = await EventRepository(database).list_after(run.run_id)
+    coverage = [json.loads(event.payload_json) for event in events if event.event_type == "source.coverage_checked"]
+    assert len(coverage) == 2
+    assert coverage[-1]["evidence_count"] == 2
+    assert coverage[-1]["minimum_evidence"] == 3
+    assert "report.completed" not in [event.event_type for event in events]
 
 
 @pytest.mark.asyncio

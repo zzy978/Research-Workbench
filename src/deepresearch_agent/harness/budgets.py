@@ -11,17 +11,19 @@ from pydantic import BaseModel, Field
 class BudgetExceeded(RuntimeError):
     def __init__(self, metric: str, observed: float, limit: float):
         self.metric, self.observed, self.limit = metric, observed, limit
-        super().__init__(f"预算耗尽: {metric}={observed} 超过上限 {limit}")
+        observed_text = f"{observed:.2f}" if metric == "wall_time_seconds" else f"{observed:g}"
+        limit_text = f"{limit:g}"
+        super().__init__(f"预算耗尽: {metric}={observed_text} 超过上限 {limit_text}")
 
 
 class BudgetLimits(BaseModel):
-    wall_time_seconds: int = Field(default=900, ge=1)
+    wall_time_seconds: int = Field(default=1800, ge=1)
     max_plan_tasks: int = Field(default=8, ge=1)
     max_tool_calls: int = Field(default=30, ge=1)
     max_tavily_calls: int = Field(default=20, ge=1)
     max_replans: int = Field(default=2, ge=0)
     max_task_retries: int = Field(default=2, ge=0)
-    max_llm_tokens: int = Field(default=100000, ge=1)
+    max_llm_tokens: int = Field(default=200000, ge=1)
     max_concurrency: int = Field(default=4, ge=1)
     tool_timeout_seconds: int = Field(default=60, ge=1)
 

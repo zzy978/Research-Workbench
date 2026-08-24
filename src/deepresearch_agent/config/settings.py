@@ -116,13 +116,13 @@ TAVILY_TIMEOUT_SECONDS = _require_positive("TAVILY_TIMEOUT_SECONDS", _get_env_in
 TAVILY_CACHE_TTL_SECONDS = _require_positive("TAVILY_CACHE_TTL_SECONDS", _get_env_int("TAVILY_CACHE_TTL_SECONDS", 86400) or 86400)
 
 HARNESS_BUDGETS = {
-    "wall_time_seconds": _require_positive("RUN_MAX_WALL_TIME_SECONDS", _get_env_int("RUN_MAX_WALL_TIME_SECONDS", 900) or 900),
+    "wall_time_seconds": _require_positive("RUN_MAX_WALL_TIME_SECONDS", _get_env_int("RUN_MAX_WALL_TIME_SECONDS", 1800) or 1800),
     "max_plan_tasks": _require_positive("RUN_MAX_PLAN_TASKS", _get_env_int("RUN_MAX_PLAN_TASKS", 8) or 8),
     "max_tool_calls": _require_positive("RUN_MAX_TOOL_CALLS", _get_env_int("RUN_MAX_TOOL_CALLS", 30) or 30),
     "max_tavily_calls": _require_positive("RUN_MAX_TAVILY_CALLS", _get_env_int("RUN_MAX_TAVILY_CALLS", 20) or 20),
     "max_replans": _require_positive("RUN_MAX_REPLANS", _get_env_int("RUN_MAX_REPLANS", 2) or 2),
     "max_task_retries": _require_positive("RUN_MAX_TASK_RETRIES", _get_env_int("RUN_MAX_TASK_RETRIES", 2) or 2),
-    "max_llm_tokens": _require_positive("RUN_MAX_LLM_TOKENS", _get_env_int("RUN_MAX_LLM_TOKENS", 100000) or 100000),
+    "max_llm_tokens": _require_positive("RUN_MAX_LLM_TOKENS", _get_env_int("RUN_MAX_LLM_TOKENS", 200000) or 200000),
     "max_concurrency": _require_positive("RUN_MAX_CONCURRENCY", _get_env_int("RUN_MAX_CONCURRENCY", 4) or 4),
     "tool_timeout_seconds": _require_positive("RUN_TOOL_TIMEOUT_SECONDS", _get_env_int("RUN_TOOL_TIMEOUT_SECONDS", 60) or 60),
 }

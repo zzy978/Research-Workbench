@@ -158,7 +158,7 @@ export function CardDetailDrawer({ stageId, run, feed, report, evidence, context
 
       {stageId === "verifying" && (
         <div className="drawer-body">
-          <p className="drawer-desc">按 7 项完成门禁逐项核查报告的可信度，任一失败则进入修复循环。</p>
+          <p className="drawer-desc">按 7 项完成门禁逐项核查报告可信度；报告问题进入定向修复，证据问题返回规划检索，超过预算后才结束。</p>
           <div className="verification-chips">
             {feed.verification.length === 0 && <span className="pending">检查中…</span>}
             {feed.verification.map((check) => (
@@ -169,6 +169,12 @@ export function CardDetailDrawer({ stageId, run, feed, report, evidence, context
           </div>
           {feed.verifyFailures.length > 0 && (
             <div className="verify-failures">
+              {feed.recovery && <div className="verify-failure">
+                <span className="verify-failure-kind">恢复动作</span>
+                <span className="verify-failure-msg">{feed.recovery.attemptsExhausted
+                  ? `${feed.recovery.action === "repair_report" ? "报告修复" : "重新规划"} ${feed.recovery.attempt ?? feed.recovery.maxAttempts ?? 0} 次后仍未通过`
+                  : `${feed.recovery.action === "repair_report" ? "修复报告" : feed.recovery.action === "replan" ? "重新规划检索" : "无法自动修复"}${feed.recovery.attempt != null ? ` · 第 ${feed.recovery.attempt}/${feed.recovery.maxAttempts ?? "?"} 次` : ""}`}</span>
+              </div>}
               {feed.verifyFailures.map((failure, index) => (
                 <div key={index} className="verify-failure">
                   <span className="verify-failure-kind">{VERIFICATION_LABELS[failure.kind] ?? failure.kind}</span>
@@ -185,7 +191,7 @@ export function CardDetailDrawer({ stageId, run, feed, report, evidence, context
           <p className="drawer-desc">研究完成，报告通过全部验证门禁。点击证据引用可查看来源详情。</p>
           <dl className="drawer-stats">
             <div><dt>迭代轮次</dt><dd>{feed.iterations.length + (feed.runningIteration != null ? 1 : 0)}</dd></div>
-            <div><dt>工具调用</dt><dd>{feed.tools.length}</dd></div>
+            <div><dt>工具调用</dt><dd>{run?.usage?.usage?.tool_calls ?? feed.tools.length}</dd></div>
             <div><dt>采集证据</dt><dd>{feed.contextCount}</dd></div>
           </dl>
           {report?.content && <ReportView report={report} evidence={evidence} onEvidence={onEvidence} />}

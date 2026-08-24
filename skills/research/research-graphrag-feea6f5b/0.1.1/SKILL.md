@@ -1,12 +1,12 @@
 ---
 name: research-graphrag-feea6f5b
 description: 复用已验证的graphrag研究轨迹，完成问题拆解、同源检索、引用报告和完成验证。
-version: 0.1.0
-status: active
+version: 0.1.1
+status: candidate
 source_modes:
 - graphrag
 created_from_runs:
-- run_f93170a5f0fb416789939987e068b0dc
+- run_3f4fcc4e68334477855522c46bb1f728
 ---
 
 ## 触发条件

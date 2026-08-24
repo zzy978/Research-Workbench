@@ -250,6 +250,14 @@ class MultiAgentOrchestrator:
         """Run only the existing Reporter/ConsistencyChecker stage."""
         return self._reporter.generate_report(state, report_type=report_type)
 
+    def recheck_report_consistency(
+        self,
+        report_content: str,
+        evidence: Sequence[Any],
+    ):
+        """Re-run the Reporter's consistency checker after a targeted repair."""
+        return self._reporter.recheck_consistency(report_content, evidence)
+
     def _print_plan_summary(self, planner_result: PlannerResult) -> None:
         """
         将计划摘要输出为JSON，便于在终端直接查看拆解后的任务列表。

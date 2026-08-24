@@ -18,6 +18,9 @@ class ChatService:
             raise AppError(ErrorCode.NOT_FOUND, "Session 不存在")
         if session.status != "active":
             raise AppError(ErrorCode.CONFLICT, "已归档 Session 不能发送消息")
+        detailed_request = request.report_type == "long_document" or any(
+            marker in request.content for marker in ("详细", "深入", "全面", "长篇")
+        )
         message, run, created = await self.runs.create_for_user_message(
             MessageCreate(
                 session_id=session_id, role="user", content=request.content,
@@ -28,8 +31,10 @@ class ChatService:
                 session_id=session_id, trigger_message_id="assigned-atomically",
                 source_mode=request.source_mode, workflow_mode=request.workflow_mode,
                 config_snapshot={
-                    "min_evidence": 1,
-                    "report_type": request.report_type,
+                    # A single weakly-related chunk may be enough for a concise
+                    # answer, but must never unlock a user-requested detailed report.
+                    "min_evidence": 3 if detailed_request else 1,
+                    "report_type": "long_document" if detailed_request else request.report_type,
                     "deep_research_max_iterations": 1 if request.source_mode.value == "graphrag" else 2,
                     "schema_version": 1,
                 },

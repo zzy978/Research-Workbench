@@ -32,6 +32,50 @@ class WorkflowDriver(Protocol):
     def plan_record(self) -> tuple[dict[str, Any], list[dict[str, Any]]] | None: ...
 
 
+def _evidence_only_report(
+    results: list[RetrievalResult],
+    *,
+    title: str = "修复后的研究报告",
+    required_sections: list[str] | None = None,
+) -> tuple[str, list[RetrievalResult]]:
+    """Build a conservative report that cannot introduce unsupported claims."""
+    selected: list[RetrievalResult] = []
+    seen_ids: set[str] = set()
+    for item in rank_evidence(results):
+        if not item.result_id or item.result_id in seen_ids:
+            continue
+        seen_ids.add(item.result_id)
+        selected.append(item)
+        if len(selected) == 6:
+            break
+
+    lines: list[str] = []
+    for index, item in enumerate(selected, 1):
+        summary = re.sub(r"\[(?:ev_)?[A-Za-z0-9_-]+\]", "", str(item.evidence or ""))
+        summary = re.sub(r"\s+", " ", summary).strip()
+        if len(summary) > 520:
+            summary = summary[:517].rstrip() + "…"
+        if summary:
+            lines.append(f"{index}. {summary} [{item.result_id}]")
+
+    if not lines:
+        return f"# {title}\n\n## 证据支持的要点\n\n当前没有可用于修复报告的有效证据。", []
+
+    sections = [f"# {title}", "## 证据支持的要点", "\n".join(lines)]
+    existing = {"证据支持的要点", "局限"}
+    first_id = selected[0].result_id
+    for name in required_sections or []:
+        clean_name = str(name).strip()
+        if clean_name and clean_name not in existing:
+            sections.extend([f"## {clean_name}", f"本节仅保留上方证据能够直接支持的内容。 [{first_id}]"])
+            existing.add(clean_name)
+    sections.extend([
+        "## 局限",
+        "本报告由一致性门禁触发保守修复，仅保留当前 Run 证据能够直接支持的陈述；被判定为不一致或无法就近引用的原报告内容已移除。",
+    ])
+    return "\n\n".join(sections), selected
+
+
 class PlanExecuteReportDriver:
     """Thin staged wrapper around the existing Planner/Worker/Reporter components."""
 
@@ -49,6 +93,7 @@ class PlanExecuteReportDriver:
         )
         self.planner_result: PlannerResult | None = None
         self.report_result: ReportResult | None = None
+        self._repair_pending = False
         self._restore(context.workflow_state)
 
     def _restore(self, payload: dict[str, Any]) -> None:
@@ -67,6 +112,7 @@ class PlanExecuteReportDriver:
             self.planner_result = PlannerResult.model_validate(payload["planner_result"])
         if payload.get("report_result"):
             self.report_result = ReportResult.model_validate(payload["report_result"])
+        self._repair_pending = bool(payload.get("repair_pending"))
 
     async def plan(self, failures: list[str] | None = None) -> None:
         self.planner_result = await asyncio.to_thread(
@@ -85,7 +131,9 @@ class PlanExecuteReportDriver:
         self.state.execution_records.extend(item for item in records if item.record_id not in existing)
 
     async def report(self) -> str:
-        if self._uses_compact_report():
+        if self._repair_pending and self.report_result is not None:
+            self._repair_pending = False
+        elif self._uses_compact_report():
             self.report_result = self._build_compact_report()
         else:
             self.report_result = await asyncio.to_thread(self.orchestrator.report, self.state)
@@ -167,20 +215,46 @@ class PlanExecuteReportDriver:
     async def repair_report(self, failures: list[str]) -> bool:
         if self.report_result is None:
             return False
+        supported = {"citation_integrity", "required_section", "report_consistency", "source_diversity"}
+        if not set(failures).issubset(supported):
+            return False
         report = self.report_result.final_report
+        if set(failures) & {"citation_integrity", "report_consistency"}:
+            all_evidence = [result for _, _, _, result in self.evidence_results()]
+            report, selected = _evidence_only_report(
+                all_evidence,
+                required_sections=list(self.context.config_snapshot.get("required_sections", [])),
+            )
+            if not selected:
+                return False
+            try:
+                consistency = await asyncio.to_thread(
+                    self.orchestrator.recheck_report_consistency,
+                    report,
+                    selected,
+                )
+            except Exception as exc:  # a failed checker must not be treated as a pass
+                consistency = ConsistencyCheckResult(
+                    is_consistent=False,
+                    issues=[{"kind": type(exc).__name__, "message": str(exc)[:240]}],
+                    raw_response=None,
+                )
+            self.report_result.consistency_check = consistency
         if "required_section" in failures and not report.lstrip().startswith("#"):
             report = "# 研究报告\n\n" + report
         if "source_diversity" in failures and "局限" not in report:
             report += "\n\n## 局限\n\n当前证据来源数量有限，结论应结合更多独立来源复核。"
         self.report_result.final_report = report
         self.state.response = report
-        return set(failures).issubset({"required_section", "source_diversity"})
+        self._repair_pending = True
+        return True
 
     def snapshot(self) -> dict[str, Any]:
         return {
             "state": self.state.model_dump(mode="json"),
             "planner_result": self.planner_result.model_dump(mode="json") if self.planner_result else None,
             "report_result": self.report_result.model_dump(mode="json") if self.report_result else None,
+            "repair_pending": self._repair_pending,
         }
 
     def execution_records(self) -> list[ExecutionRecord]:
@@ -229,6 +303,7 @@ class DeepResearchDriver:
         self.results = [RetrievalResult.from_dict(item) for item in payload.get("results", [])]
         self._report: str | None = payload.get("report")
         self._plan = payload.get("plan")
+        self._repair_pending = bool(payload.get("repair_pending"))
 
     async def plan(self, failures: list[str] | None = None) -> None:
         if failures and set(failures) & {"min_evidence", "claim_support", "source_match"}:
@@ -325,6 +400,9 @@ class DeepResearchDriver:
                                                "iterations_total": len(self._iterations)})
 
     async def report(self) -> str:
+        if self._repair_pending and self._report is not None:
+            self._repair_pending = False
+            return self._report
         ranked = rank_evidence(self.results)
         body = add_inline_citations(sanitize_report(self.answer), citation_evidence_ids(ranked))
         limitation = "\n\n## 局限\n\n当前证据来源数量有限，结论应结合更多独立来源复核。" if len({item.metadata.source_id for item in ranked}) < 2 else ""
@@ -334,12 +412,23 @@ class DeepResearchDriver:
     async def repair_report(self, failures: list[str]) -> bool:
         if self._report is None:
             return False
+        supported = {"citation_integrity", "required_section", "report_consistency", "source_diversity"}
+        if not set(failures).issubset(supported):
+            return False
+        if set(failures) & {"citation_integrity", "report_consistency"}:
+            self._report, selected = _evidence_only_report(
+                self.results,
+                required_sections=list(self.context.config_snapshot.get("required_sections", [])),
+            )
+            if not selected:
+                return False
         if "source_diversity" in failures and "局限" not in self._report:
             self._report += "\n\n## 局限\n\n当前证据来源数量有限。"
-        return set(failures).issubset({"required_section", "source_diversity"})
+        self._repair_pending = True
+        return True
 
     def snapshot(self) -> dict[str, Any]:
-        return {"answer": self.answer, "report": self._report, "plan": self._plan, "results": [item.to_dict() for item in self.results]}
+        return {"answer": self.answer, "report": self._report, "plan": self._plan, "results": [item.to_dict() for item in self.results], "repair_pending": self._repair_pending}
 
     def execution_records(self) -> list[ExecutionRecord]:
         task_id = f"task_{self.context.run_id}_research"

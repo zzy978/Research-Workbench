@@ -1,4 +1,5 @@
 import json
+import json
 import time
 import uuid
 
@@ -115,6 +116,26 @@ def test_message_idempotency_and_source_validation(client):
     assert invalid.status_code == 422
     assert invalid.json()["error"]["code"] == "VALIDATION_ERROR"
     assert invalid.headers["X-Request-ID"].startswith("req_")
+
+
+def test_detailed_request_raises_report_depth_and_evidence_requirement(client):
+    client.app.state.run_service.schedule = lambda _run_id: None
+    session_id = new_session(client)
+    response = client.post(f"/api/v1/sessions/{session_id}/messages", json={
+        "client_message_id": str(uuid.uuid4()),
+        "content": "写一份详细的、关于心血管疾病的研究报告",
+        "source_mode": "graphrag",
+        "workflow_mode": "plan_execute_report",
+    })
+    assert response.status_code == 202
+
+    async def load_run():
+        return await RunRepository(client.app.state.database).get(response.json()["run_id"])
+
+    run = client.portal.call(load_run)
+    config = json.loads(run.config_snapshot_json)
+    assert config["report_type"] == "long_document"
+    assert config["min_evidence"] == 3
 
 
 def test_run_report_evidence_and_durable_sse_replay(client):

@@ -17,7 +17,7 @@ class StateMachine:
         RunStatus.QUEUED: {RunStatus.CONTEXT_BUILDING, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED},
         RunStatus.CONTEXT_BUILDING: {RunStatus.PLANNING, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
         RunStatus.PLANNING: {RunStatus.EXECUTING, RunStatus.NEEDS_USER_INPUT, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
-        RunStatus.EXECUTING: {RunStatus.EXECUTING, RunStatus.RETRYING, RunStatus.REPORTING, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
+        RunStatus.EXECUTING: {RunStatus.EXECUTING, RunStatus.RETRYING, RunStatus.REPLANNING, RunStatus.REPORTING, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
         RunStatus.RETRYING: {RunStatus.EXECUTING, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
         RunStatus.REPORTING: {RunStatus.VERIFYING, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
         RunStatus.VERIFYING: {RunStatus.COMPLETED, RunStatus.REPLANNING, RunStatus.REPORTING, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},

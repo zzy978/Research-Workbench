@@ -71,9 +71,16 @@ function ExecCard({ feed, run }: {feed: StageFeed; run: Run | null}) {
   const cachePct = cacheHitRate(usage?.prefix_cache_hit_tokens, usage?.prefix_cache_miss_tokens);
 
   const isPlanWorkflow = run?.workflow_mode === "plan_execute_report";
+  const executionSummary = run?.status === "failed"
+    ? ["NO_SOURCE_EVIDENCE", "INSUFFICIENT_SOURCE_EVIDENCE"].includes(run.error_code ?? "")
+      ? "私域资料不足，研究已停止"
+      : "研究执行失败"
+    : run?.status === "budget_exhausted"
+      ? "研究预算耗尽，执行已停止"
+      : `正在执行计划任务 · ${feed.taskCount}/${feed.planTasks.length || feed.taskStartedCount || 1}`;
   return <div className="exec-card">
     <div className="iter-rows" ref={listRef}>
-      {rows.length === 0 && <div className="iter-row is-empty">{isPlanWorkflow ? `正在执行计划任务 · ${feed.taskCount}/${feed.planTasks.length || feed.taskStartedCount || 1}` : "等待深度研究迭代开始…"}</div>}
+      {rows.length === 0 && <div className="iter-row is-empty">{isPlanWorkflow ? executionSummary : "等待深度研究迭代开始…"}</div>}
       {!isPlanWorkflow && rows.map((row) => (
         <div key={row.key} className={`iter-row${row.live ? " is-live" : ""}`}>
           <span className="iter-row-label">{row.label}</span>
@@ -171,7 +178,15 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
     );
     return last ? String(last.status) : raw;
   }, [run?.current_stage, events]);
-  const arrived = useMemo(() => arrivedStages(effectiveStage), [effectiveStage]);
+  const arrived = useMemo(() => {
+    const reached = [effectiveStage, ...events.flatMap((event) => [event.stage, typeof event.status === "string" ? event.status : undefined])]
+      .filter((value): value is string => Boolean(value));
+    const highest = reached.reduce((best, value) => {
+      const index = STAGES.findIndex((stage) => stage.id === value);
+      return index > best.index ? { value, index } : best;
+    }, { value: effectiveStage ?? "", index: STAGES.findIndex((stage) => stage.id === effectiveStage) });
+    return arrivedStages(highest.value);
+  }, [effectiveStage, events]);
   const { positions, update: updatePosition } = useStagePositions(runId, arrived);
 
   async function submit(event: FormEvent) {
@@ -215,19 +230,29 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
       }
       case "executing": return <ExecCard feed={feed} run={run} />;
       case "reporting": return <CardSummary
-        lines={[run?.status === "cancelled" ? "任务已取消，未生成报告" : feed.reportChars != null ? `报告已生成 · ${feed.reportChars} 字符` : "正在生成研究报告…"]}
+        lines={[run?.status === "cancelled"
+          ? "任务已取消，未生成报告"
+          : run?.status === "reporting" && feed.recovery?.action === "repair_report"
+            ? `正在修复报告 · 第 ${feed.recovery.attempt ?? 1}/${feed.recovery.maxAttempts ?? "?"} 次`
+            : feed.reportChars != null ? `报告已生成 · ${feed.reportChars} 字符` : "正在生成研究报告…"]}
         meta={`${feed.taskCount} 个任务完成`}
       />;
       case "verifying": {
         const done = feed.verification.filter((check) => check.passed != null).length;
         const passed = feed.verification.filter((check) => check.passed === true).length;
         const lines = done > 0 ? [`已核查 ${done} 项 · ${passed} 项通过`] : ["正在逐项验证…"];
-        if (feed.verifyFailures.length > 0) lines.push(`失败 ${feed.verifyFailures.length} 项，进入修复`);
+        if (feed.verifyFailures.length > 0) {
+          if (feed.recovery?.attemptsExhausted && feed.recovery.action === "repair_report") lines.push(`报告自动修复 ${feed.recovery.attempt ?? feed.recovery.maxAttempts ?? 0} 次后仍未通过`);
+          else if (feed.recovery?.attemptsExhausted && feed.recovery.action === "replan") lines.push(`重新规划 ${feed.recovery.attempt ?? feed.recovery.maxAttempts ?? 0} 次后仍未通过`);
+          else if (feed.recovery?.action === "repair_report") lines.push(`失败 ${feed.verifyFailures.length} 项，将修复报告 · 第 ${feed.recovery.attempt ?? 1}/${feed.recovery.maxAttempts ?? "?"} 次`);
+          else if (feed.recovery?.action === "replan") lines.push(`失败 ${feed.verifyFailures.length} 项，将重新规划检索 · 第 ${feed.recovery.attempt ?? 1}/${feed.recovery.maxAttempts ?? "?"} 次`);
+          else lines.push(`失败 ${feed.verifyFailures.length} 项，无法自动修复`);
+        }
         return <CardSummary lines={lines} />;
       }
       case "completed": return <CardSummary
         lines={[feed.verifyFailures.length === 0 ? "全部验证通过，研究完成" : "研究结束"]}
-        meta={`证据 ${feed.contextCount} · 工具 ${feed.tools.length}`}
+        meta={`证据 ${feed.contextCount} · 工具 ${run?.usage?.usage?.tool_calls ?? feed.tools.length}`}
       />;
     }
   }

@@ -201,6 +201,72 @@ class HarnessRuntime:
                     await self._persist_execution(context, driver, budget)
                     context.workflow_state = driver.snapshot()
                     context.budget_usage = budget.usage
+                    persisted_evidence = await self.evidence_repository.list_for_run(run_id)
+                    minimum_evidence = int(context.config_snapshot.get("min_evidence", 1))
+                    if len(persisted_evidence) < minimum_evidence:
+                        evidence_count = len(persisted_evidence)
+                        coverage_reason = "no_source_evidence" if evidence_count == 0 else "insufficient_source_evidence"
+                        failures = ["min_evidence", coverage_reason]
+                        context.workflow_state["verification_failures"] = failures
+                        await self.events.publish(
+                            run_id,
+                            "source.coverage_checked",
+                            stage="executing",
+                            payload={
+                                "evidence_count": evidence_count,
+                                "minimum_evidence": minimum_evidence,
+                                "source_mode": context.source_mode.value,
+                                "passed": False,
+                            },
+                        )
+                        # One focused replan is useful for a poorly phrased first
+                        # retrieval (and recovers known short-query cases). Repeating
+                        # another full plan after two zero-evidence executions only
+                        # burns time/tokens and cannot produce a supported report.
+                        if budget.usage.replans == 0 and budget.limits.max_replans > 0:
+                            budget.consume_replan()
+                            context.budget_usage = budget.usage
+                            await self._transition(
+                                context,
+                                RunStatus.REPLANNING,
+                                event_type="plan.replanning",
+                                payload={
+                                    "recovery_action": "replan",
+                                    "recovery_reason": coverage_reason,
+                                    "attempt": 1,
+                                    "max_attempts": 1,
+                                    "failures": failures,
+                                },
+                            )
+                            await self.checkpoints.save(context, "replanning")
+                            continue
+
+                        source_hint = (
+                            "请导入与该主题相关的私域资料，或改用联网搜索。"
+                            if context.source_mode is SourceMode.GRAPHRAG
+                            else "请调整问题或检查联网检索配置。"
+                        )
+                        error_code = "NO_SOURCE_EVIDENCE" if evidence_count == 0 else "INSUFFICIENT_SOURCE_EVIDENCE"
+                        evidence_summary = (
+                            "未检索到可支持该问题的证据"
+                            if evidence_count == 0
+                            else f"仅检索到 {evidence_count} 条有效证据，低于本报告所需的 {minimum_evidence} 条"
+                        )
+                        await self._transition(
+                            context,
+                            RunStatus.FAILED,
+                            event_type="run.failed",
+                            error_code=error_code,
+                            error_message=f"连续两轮检索后{evidence_summary}；{source_hint}",
+                            payload={
+                                "recovery_action": "fail",
+                                "recovery_reason": coverage_reason,
+                                "attempts_exhausted": True,
+                                "failures": failures,
+                            },
+                        )
+                        await self.checkpoints.save(context, "failed")
+                        continue
                     await self.checkpoints.save(context, "executing")
                     await self._transition(context, RunStatus.REPORTING)
 
@@ -226,7 +292,30 @@ class HarnessRuntime:
                     context.workflow_state = driver.snapshot()
                     context.workflow_state["verification_failures"] = verdict.failures
                     await self.checkpoints.save(context, "verifying")
-                    await self.events.publish(run_id, "verification.completed", stage="verifying", payload={"passed": verdict.passed, "failures": verdict.failures})
+                    decision = classify_verification_failures(verdict.failures) if not verdict.passed else None
+                    recovery_action = decision.action if verdict.recoverable and decision is not None else "complete" if verdict.passed else "fail"
+                    attempt = None
+                    max_attempts = None
+                    attempts_exhausted = False
+                    if recovery_action == "repair_report":
+                        max_attempts = budget.limits.max_task_retries
+                        attempts_exhausted = budget.usage.task_retries >= max_attempts
+                        attempt = budget.usage.task_retries if attempts_exhausted else budget.usage.task_retries + 1
+                    elif recovery_action == "replan":
+                        max_attempts = budget.limits.max_replans
+                        attempts_exhausted = budget.usage.replans >= max_attempts
+                        attempt = budget.usage.replans if attempts_exhausted else budget.usage.replans + 1
+                    await self.events.publish(
+                        run_id, "verification.completed", stage="verifying",
+                        payload={
+                            "passed": verdict.passed,
+                            "failures": verdict.failures,
+                            "recovery_action": recovery_action,
+                            "attempt": attempt,
+                            "max_attempts": max_attempts,
+                            "attempts_exhausted": attempts_exhausted,
+                        },
+                    )
                     if verdict.passed:
                         self.state_machine.validate(context.status, RunStatus.COMPLETED, contract_passed=True)
                         context.status = RunStatus.COMPLETED
@@ -257,15 +346,49 @@ class HarnessRuntime:
                                 await self.events.publish(run_id, "skill.distillation_failed", stage="completed", payload={"error": type(exc).__name__})
                         break
 
-                    decision = classify_verification_failures(verdict.failures)
-                    if verdict.recoverable and decision.action == "repair_report" and await driver.repair_report(verdict.failures):
+                    assert decision is not None
+                    if (
+                        verdict.recoverable
+                        and decision.action == "repair_report"
+                        and budget.usage.task_retries >= budget.limits.max_task_retries
+                    ):
+                        await self._transition(
+                            context, RunStatus.FAILED, event_type="run.failed",
+                            error_message=f"报告自动修复 {budget.usage.task_retries} 次后仍未通过: {', '.join(verdict.failures)}",
+                            payload={"recovery_action": "repair_report", "attempts_exhausted": True, "failures": verdict.failures},
+                        )
+                    elif (
+                        verdict.recoverable
+                        and decision.action == "replan"
+                        and budget.usage.replans >= budget.limits.max_replans
+                    ):
+                        await self._transition(
+                            context, RunStatus.FAILED, event_type="run.failed",
+                            error_message=f"重新规划 {budget.usage.replans} 次后仍未通过: {', '.join(verdict.failures)}",
+                            payload={"recovery_action": "replan", "attempts_exhausted": True, "failures": verdict.failures},
+                        )
+                    elif verdict.recoverable and decision.action == "repair_report" and await driver.repair_report(verdict.failures):
                         budget.consume_retry()
                         context.budget_usage = budget.usage
-                        await self._transition(context, RunStatus.REPORTING, event_type="run.retrying")
+                        context.workflow_state = driver.snapshot()
+                        await self._transition(
+                            context, RunStatus.REPORTING, event_type="run.retrying",
+                            payload={
+                                "recovery_action": "repair_report", "attempt": budget.usage.task_retries,
+                                "max_attempts": budget.limits.max_task_retries, "failures": verdict.failures,
+                            },
+                        )
+                        await self.checkpoints.save(context, "reporting")
                     elif verdict.recoverable and decision.action == "replan":
                         budget.consume_replan()
                         context.budget_usage = budget.usage
-                        await self._transition(context, RunStatus.REPLANNING, event_type="plan.replanning")
+                        await self._transition(
+                            context, RunStatus.REPLANNING, event_type="plan.replanning",
+                            payload={
+                                "recovery_action": "replan", "attempt": budget.usage.replans,
+                                "max_attempts": budget.limits.max_replans, "failures": verdict.failures,
+                            },
+                        )
                     else:
                         await self._transition(context, RunStatus.FAILED, event_type="run.failed", error_message=f"Completion Contract 未通过: {', '.join(verdict.failures)}")
 
@@ -335,12 +458,22 @@ class HarnessRuntime:
             RunStatus.VERIFYING: RunStatus.VERIFYING,
         }.get(checkpoint_status, RunStatus.QUEUED)
 
-    async def _transition(self, context: RunContext, target: RunStatus, *, event_type: str | None = None, error_code: str | None = None, error_message: str | None = None) -> None:
+    async def _transition(
+        self,
+        context: RunContext,
+        target: RunStatus,
+        *,
+        event_type: str | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
         self.state_machine.validate(context.status, target)
         context.status = target
         self._attach_prefix_usage(context)
         await self.runs.update_status(context.run_id, status=target.value, current_stage=target.value, error_code=error_code, error_message=error_message, usage={"limits": context.budget_limits.model_dump(), "usage": context.budget_usage.model_dump()})
-        await self.events.publish(context.run_id, event_type or "run.stage_changed", stage=target.value, payload={"status": target.value, "error_code": error_code})
+        event_payload = {"status": target.value, "error_code": error_code, **(payload or {})}
+        await self.events.publish(context.run_id, event_type or "run.stage_changed", stage=target.value, payload=event_payload)
 
     async def _assert_not_cancelled(self, context: RunContext) -> None:
         run = await self.runs.get(context.run_id)
