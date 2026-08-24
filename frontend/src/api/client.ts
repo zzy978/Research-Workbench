@@ -14,7 +14,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   capabilities: () => request<Capabilities>("/capabilities"),
-  health: () => request<{status: string; components: Record<string, {status: string; configured?: boolean}>}>("/health"),
+  health: () => request<{status: string; checked_at: string; components: Record<string, {status: string; configured?: boolean; reason?: string | null; check_level?: string}>}>("/health"),
   cacheStats: () => request<CacheStats>("/cache/stats"),
   sessions: () => request<{items: Session[]; total: number}>("/sessions?include_archived=true"),
   session: (id: string) => request<SessionDetail>(`/sessions/${id}`),

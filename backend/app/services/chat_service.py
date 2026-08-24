@@ -27,11 +27,20 @@ class ChatService:
             RunCreate(
                 session_id=session_id, trigger_message_id="assigned-atomically",
                 source_mode=request.source_mode, workflow_mode=request.workflow_mode,
-                config_snapshot={"min_evidence": 1, "report_type": request.report_type, "deep_research_max_iterations": 2, "schema_version": 1},
+                config_snapshot={
+                    "min_evidence": 1,
+                    "report_type": request.report_type,
+                    "deep_research_max_iterations": 1 if request.source_mode.value == "graphrag" else 2,
+                    "schema_version": 1,
+                },
                 budget=HARNESS_BUDGETS,
             ),
         )
         if created:
+            if session.title.strip() in {"新对话", "New conversation", "Untitled"}:
+                title = " ".join(request.content.strip().split())[:36]
+                if title:
+                    await self.sessions.rename(session_id, title)
             self.run_service.schedule(run.run_id)
         return RunAccepted(
             message_id=message.message_id, run_id=run.run_id, status=run.status,

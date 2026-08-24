@@ -19,6 +19,9 @@ from deepresearch_agent.agents.multi_agent.core.plan_spec import (
     PlanSpec,
     PlanExecutionSignal,
     TaskNode,
+    TaskGraph,
+    ProblemStatement,
+    AcceptanceCriteria,
 )
 from deepresearch_agent.agents.multi_agent.planner.clarifier import (
     Clarifier,
@@ -143,6 +146,17 @@ class BasePlanner:
         # 确保PlanContext存在
         context = self._ensure_plan_context(state)
 
+        simple = self._simple_plan(state, context, assumptions or [])
+        if simple is not None:
+            state.plan = simple
+            state.plan_context = context
+            state.update_timestamp()
+            return PlannerResult(
+                plan_spec=simple,
+                clarification=ClarificationResult(needs_clarification=False),
+                executor_signal=simple.to_execution_signal(),
+            )
+
         # Step 1: 澄清分析
         clarification = self._clarifier.analyze(context)
         _LOGGER.info("Clarification result: %s", clarification.model_dump())
@@ -192,6 +206,30 @@ class BasePlanner:
             task_decomposition=task_decomposition,
             review_outcome=review_outcome,
             executor_signal=executor_signal,
+        )
+
+    @staticmethod
+    def _simple_plan(state: PlanExecuteState, context: PlanContext, assumptions: List[str]) -> Optional[PlanSpec]:
+        """Use one bounded retrieval task for short, explicit summary/list questions."""
+        query = (context.refined_query or context.original_query or "").strip()
+        markers = ("概括", "总结", "要点", "列出", "是什么", "简述", "summarize", "list ", "what is")
+        if len(query) > 160 or not any(marker in query.lower() for marker in markers):
+            return None
+        task_type = "web_search" if state.source_mode == "web" else "hybrid_search"
+        node = TaskNode(
+            task_type=task_type,
+            source_mode=state.source_mode,
+            description=query,
+            priority=1,
+            parameters={"query": query, "top_k": 6},
+        )
+        return PlanSpec(
+            source_mode=state.source_mode,
+            problem_statement=ProblemStatement(original_query=context.original_query, refined_query=query),
+            assumptions=assumptions,
+            task_graph=TaskGraph(nodes=[node], execution_mode="sequential"),
+            acceptance_criteria=AcceptanceCriteria(min_evidence_count=1),
+            status="executing",
         )
 
     @staticmethod

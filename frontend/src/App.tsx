@@ -16,8 +16,12 @@ export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("sidebar.collapsed") === "1");
   useEffect(() => { localStorage.setItem("sidebar.collapsed", sidebarCollapsed ? "1" : "0"); }, [sidebarCollapsed]);
   useEffect(() => {
-    if (selected || !sessions.data?.items.length) return;
-    const first = sessions.data.items.find((item) => item.status === "active"); if (first) setSelected(first.session_id);
+    if (!sessions.data) return;
+    const exists = selected && sessions.data.items.some((item) => item.session_id === selected);
+    if (exists) return;
+    const first = sessions.data.items.find((item) => item.status === "active");
+    if (first) { setSelected(first.session_id); localStorage.setItem("last_session_id", first.session_id); }
+    else { setSelected(undefined); localStorage.removeItem("last_session_id"); }
   }, [sessions.data, selected]);
   function select(id: string) { setSelected(id); localStorage.setItem("last_session_id", id); navigate("/"); }
   async function create() { const item = await api.createSession(); await queryClient.invalidateQueries({queryKey: ["sessions"]}); select(item.session_id); }

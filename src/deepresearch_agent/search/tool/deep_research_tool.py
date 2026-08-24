@@ -416,7 +416,7 @@ class DeepResearchTool(BaseSearchTool):
             return self.thinking_engine.generate_next_query()
             
         # 在线程池中运行同步代码，避免阻塞事件循环
-        return await asyncio.get_event_loop().run_in_executor(None, sync_generate)
+        return await asyncio.to_thread(sync_generate)
 
     async def _async_search(self, query: str):
         """异步执行搜索，避免阻塞事件循环"""
@@ -444,7 +444,7 @@ class DeepResearchTool(BaseSearchTool):
             return self.dual_searcher.search(query)
         
         # 在线程池中运行同步代码，避免阻塞事件循环
-        return await asyncio.get_event_loop().run_in_executor(None, search_wrapper)
+        return await asyncio.to_thread(search_wrapper)
 
     def _search_current_provider(self, query: str):
         if self.retrieval_provider is None:
@@ -490,14 +490,14 @@ class DeepResearchTool(BaseSearchTool):
             return response.content if hasattr(response, 'content') else str(response)
         
         # 在线程池中运行同步LLM调用
-        return await asyncio.get_event_loop().run_in_executor(None, llm_invoke)
+        return await asyncio.to_thread(llm_invoke)
 
     async def _async_generate_final_answer(self, query, retrieved_content, thinking):
         """异步生成最终答案"""
         def generate_wrapper():
             return self._generate_final_answer(query, retrieved_content, thinking)
         
-        return await asyncio.get_event_loop().run_in_executor(None, generate_wrapper)
+        return await asyncio.to_thread(generate_wrapper)
         
     def _log(self, message):
         """记录执行日志"""
@@ -868,7 +868,7 @@ class DeepResearchTool(BaseSearchTool):
         def generate_sub_queries():
             return self.query_generator.generate_sub_queries(query)
         
-        initial_sub_queries = await asyncio.get_event_loop().run_in_executor(None, generate_sub_queries)
+        initial_sub_queries = await asyncio.to_thread(generate_sub_queries)
         self._log(f"\n[深度研究] 生成了{len(initial_sub_queries)}个初始子查询")
         
         think = ""
@@ -932,7 +932,7 @@ class DeepResearchTool(BaseSearchTool):
                     def generate_hypotheses():
                         return QueryGenerator.generate_multiple_hypotheses(query, self.llm)
                     
-                    hypotheses = await asyncio.get_event_loop().run_in_executor(None, generate_hypotheses)
+                    hypotheses = await asyncio.to_thread(generate_hypotheses)
                     
                     if hypotheses:
                         self._log(f"\n[深度研究] 生成了{len(hypotheses)}个新假设，尝试从新角度探索")
@@ -985,7 +985,7 @@ class DeepResearchTool(BaseSearchTool):
                 def generate_followup():
                     return self.query_generator.generate_followup_queries(query, self.all_retrieved_info)
                 
-                followup_queries = await asyncio.get_event_loop().run_in_executor(None, generate_followup)
+                followup_queries = await asyncio.to_thread(generate_followup)
                 
                 if followup_queries:
                     self._log(f"\n[深度研究] 生成了{len(followup_queries)}个跟进查询")
@@ -1133,7 +1133,7 @@ class DeepResearchTool(BaseSearchTool):
                 def check_gap_needed():
                     return len(self.query_generator.generate_followup_queries(query, self.all_retrieved_info)) > 0
                 
-                gap_needed = await asyncio.get_event_loop().run_in_executor(None, check_gap_needed)
+                gap_needed = await asyncio.to_thread(check_gap_needed)
                 
                 if not gap_needed:
                     reflection_msg = "\n**已收集到足够的信息，可以开始整合分析了**\n"
@@ -1304,7 +1304,7 @@ class DeepResearchTool(BaseSearchTool):
             return response.content if hasattr(response, 'content') else str(response)
         
         # 在线程池中运行同步LLM调用  
-        return await asyncio.get_event_loop().run_in_executor(None, llm_fix)
+        return await asyncio.to_thread(llm_fix)
     
     def close(self):
         """关闭资源"""

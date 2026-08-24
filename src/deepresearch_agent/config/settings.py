@@ -344,6 +344,10 @@ MEMORY_LLM_MAX_OUTPUT_TOKENS = _require_positive(
 )
 LLM_TEMPERATURE = _get_env_float("TEMPERATURE", None)
 LLM_MAX_TOKENS = _get_env_int("MAX_TOKENS", None)
+LLM_REQUEST_TIMEOUT_SECONDS = _require_positive(
+    "LLM_REQUEST_TIMEOUT_SECONDS", _get_env_int("LLM_REQUEST_TIMEOUT_SECONDS", 90) or 90,
+)
+LLM_MAX_RETRIES = max(0, _get_env_int("LLM_MAX_RETRIES", 1) or 0)
 
 OPENAI_EMBEDDING_CONFIG = {
     "model": OPENAI_EMBEDDINGS_MODEL,
@@ -359,6 +363,8 @@ OPENAI_LLM_CONFIG = {
     "max_tokens": LLM_MAX_TOKENS,
     "api_key": OPENAI_API_KEY,
     "base_url": OPENAI_BASE_URL,
+    "timeout": LLM_REQUEST_TIMEOUT_SECONDS,
+    "max_retries": LLM_MAX_RETRIES,
 }
 
 # ===== 相似实体检测参数 =====

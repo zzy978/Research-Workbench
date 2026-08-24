@@ -34,3 +34,7 @@ class AppError(RuntimeError):
 
     def as_dict(self) -> Dict[str, Any]:
         return {"code": self.code.value, "message": self.message, "retryable": self.retryable, "details": self.details}
+
+
+class RunCancelled(RuntimeError):
+    """Internal cooperative-cancellation signal; never exposed as a failure."""

@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from deepresearch_agent.harness.contracts import ContractCheckData, SourceMode
+from deepresearch_agent.harness.report_safety import has_internal_material
 
 _CITATION = re.compile(r"\[\^?(ev_[A-Za-z0-9_-]+)\]")
 
@@ -45,28 +46,33 @@ class DeterministicVerifiers:
     def citation_integrity(self) -> ContractCheckData:
         citations = _CITATION.findall(self.report)
         missing = sorted({citation for citation in citations if citation not in self._by_id})
-        passed = bool(citations) and not missing
-        return self._check("citation_integrity", passed, expected="至少一个引用且全部属于当前 Run", observed={"citations": citations, "missing": missing}, explanation="确定性解析稳定 evidence_id 引用")
+        claim_lines = self._claim_lines()
+        uncited = [line[:160] for line in claim_lines if not _CITATION.search(line)]
+        passed = bool(citations) and not missing and not uncited
+        return self._check("citation_integrity", passed, expected="每条实质性主张就近引用当前 Run 证据", observed={"citations": citations, "missing": missing, "uncited_claims": uncited}, explanation="解析稳定 evidence_id 并检查主张附近引用")
 
     def required_section(self, required_sections: list[str]) -> ContractCheckData:
         headings = [match.group(1).strip() for match in re.finditer(r"(?m)^#{1,4}\s+(.+?)\s*$", self.report)]
         missing = [name for name in required_sections if not any(name.lower() in heading.lower() for heading in headings)]
-        passed = bool(headings) and not missing
+        passed = bool(headings) and not missing and not has_internal_material(self.report)
         return self._check("required_section", passed, expected=required_sections or "至少一个非空 Markdown 标题", observed={"headings": headings, "missing": missing}, explanation="报告必需章节存在且非空")
 
     def claim_support(self) -> ContractCheckData:
-        citations = _CITATION.findall(self.report)
-        supported = [citation for citation in citations if citation in self._by_id]
-        passed = bool(self.report.strip()) and bool(supported)
-        return self._check("claim_support", passed, expected="报告包含当前 Run 的支持证据", observed=supported, explanation="MVP 以稳定引用作为关键主张支持的确定性下限")
+        claims = self._claim_lines()
+        supported = [line for line in claims if any(citation in self._by_id for citation in _CITATION.findall(line))]
+        passed = bool(claims) and len(supported) == len(claims)
+        return self._check("claim_support", passed, expected="每条实质性主张都有当前 Run 证据", observed={"claims": len(claims), "supported": len(supported)}, explanation="以逐段就近引用作为确定性支持下限")
 
     def report_consistency(self, consistency_passed: bool | None) -> ContractCheckData:
-        passed = consistency_passed is not False and bool(self.report.strip())
+        passed = consistency_passed is True and bool(self.report.strip()) and not has_internal_material(self.report)
         return self._check("report_consistency", passed, expected=True, observed=consistency_passed, explanation="现有 ConsistencyChecker 未报告失败；未配置 LLM 检查时保守依赖确定性检查")
 
     def source_diversity(self) -> ContractCheckData:
         sources = set()
+        cited = set(_CITATION.findall(self.report))
         for item in self.evidence:
+            if str(self._get(item, "evidence_id", "")) not in cited:
+                continue
             source_id = str(self._get(item, "source_id", ""))
             metadata = self._get(item, "metadata_json", "{}")
             if self.source_mode is SourceMode.WEB:
@@ -81,3 +87,18 @@ class DeterministicVerifiers:
         limitation = bool(re.search(r"局限|限制|single[- ]source|limited", self.report, re.I))
         passed = len(sources) >= 2 or (bool(sources) and limitation)
         return self._check("source_diversity", passed, expected="至少两个独立来源，或明确披露单一来源局限", observed={"sources": sorted(sources), "limitation_disclosed": limitation}, explanation="来源不足不得伪造多样性")
+
+    def _claim_lines(self) -> list[str]:
+        claims: list[str] = []
+        excluded_section = False
+        for raw in self.report.splitlines():
+            line = raw.strip()
+            if line.startswith("#"):
+                excluded_section = bool(re.search(r"局限|限制|方法|证据引用|参考来源", line, re.I))
+                continue
+            if excluded_section or len(line) < 12 or line.startswith(("```", "|")):
+                continue
+            if re.search(r"局限|证据引用|参考来源|基于证据[。.]?$", line, re.I):
+                continue
+            claims.append(line)
+        return claims

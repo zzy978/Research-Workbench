@@ -47,6 +47,7 @@ function savePositions(runId: string, positions: StagePositions): void {
  * 不重置用户已拖拽的位置。
  */
 export function useStagePositions(runId: string | null, arrived: string[]) {
+  const [compact, setCompact] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 760px)").matches);
   const [positions, setPositions] = useState<StagePositions>(() =>
     runId ? (loadPositions(runId) ?? {}) : {}
   );
@@ -57,15 +58,24 @@ export function useStagePositions(runId: string | null, arrived: string[]) {
   useEffect(() => {
     setPositions(runId ? (loadPositions(runId) ?? {}) : {});
   }, [runId]);
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 760px)");
+    const onChange = () => setCompact(media.matches);
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, []);
 
   const effective = useMemo(() => {
+    if (compact) {
+      return Object.fromEntries(arrived.map((id, index) => [id, { x: 0, y: 20 + index * (CARD_H + 28) }]));
+    }
     const result: StagePositions = { ...positions };
     const defaults = defaultPositions(arrived.length);
     arrived.forEach((id) => {
       if (!result[id]) result[id] = defaults[id] ?? { x: PAD, y: PAD };
     });
     return result;
-  }, [arrived, positions]);
+  }, [arrived, compact, positions]);
 
   const update = useCallback(
     (id: string, x: number, y: number) => {

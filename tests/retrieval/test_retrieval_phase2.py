@@ -49,6 +49,19 @@ def _context(mode: SourceMode) -> ToolCallContext:
     return ToolCallContext(run_id="run_test", task_id="task_1", tool_call_id="call_1", source_mode=mode)
 
 
+def test_graph_relevance_rejects_broad_disease_overlap() -> None:
+    def result(text: str) -> RetrievalResult:
+        return RetrievalResult(
+            granularity="Chunk", evidence=text, source="hybrid_search", source_mode="graphrag", score=0.8,
+            metadata=RetrievalMetadata(source_id=text[:8], source_type="chunk"),
+        )
+
+    query = "概括急性缺血性脑血管病的药物治疗原则"
+    specific = result("阿司匹林常用于预防缺血性脑血管病。")
+    broad = result("药物治疗是急性脑血管病的主要治疗手段。")
+    assert GraphRAGProvider._filter_relevant(query, [specific, broad]) == [specific]
+
+
 @pytest.mark.asyncio
 async def test_run_timeout_wrapper_preserves_source_and_returns_typed_timeout(monkeypatch):
     provider = FakeProvider(SourceMode.WEB)
@@ -118,7 +131,7 @@ async def test_graphrag_provider_maps_existing_structured_results():
             return {"retrieval_results": [{
                 "result_id": "result-1",
                 "granularity": "Chunk",
-                "evidence": "private evidence",
+                "evidence": "query private evidence",
                 "metadata": {"source_id": "chunk-1", "source_type": "chunk", "confidence": 0.8},
                 "source": "local_search",
                 "score": 0.8,

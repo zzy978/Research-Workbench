@@ -81,7 +81,7 @@ class TavilyProvider:
         else:
             raw = self._sanitize_external(cached)
         artifact = self._store_raw(call_context, raw)
-        return self._map_results(raw, artifact=artifact)[: int(args["top_k"])]
+        return self._map_results(raw, artifact=artifact, query=str(args["query"]))[: int(args["top_k"])]
 
     async def _search_with_retry(self, args: dict[str, Any]) -> dict[str, Any]:
         call_args = {
@@ -136,7 +136,7 @@ class TavilyProvider:
         except (TypeError, ValueError):
             return float(2 ** (attempt + 1))
 
-    def _map_results(self, raw: dict[str, Any], *, artifact: Optional[dict[str, str]]) -> list[RetrievalResult]:
+    def _map_results(self, raw: dict[str, Any], *, artifact: Optional[dict[str, str]], query: str = "") -> list[RetrievalResult]:
         deduped: dict[tuple[str, str], RetrievalResult] = {}
         retrieved_at = datetime.now(timezone.utc)
         for item in raw.get("results", []) or []:
@@ -153,6 +153,15 @@ class TavilyProvider:
                 "untrusted_external_content": True,
                 "content_truncated": len(normalized) > 12000,
             }
+            domain = domain_from_url(url)
+            query_terms = {
+                token for token in re.findall(r"[a-z][a-z0-9-]{3,}", query.lower())
+                if token not in {"basic", "advanced", "search", "depth", "official", "documentation", "document", "docs"}
+            }
+            brand_match = any(token in domain.lower().split(".") for token in query_terms)
+            documentation_domain = domain.lower().startswith(("docs.", "help.", "developer."))
+            public_authority = domain.lower().endswith((".gov", ".gov.cn", ".edu", ".edu.cn"))
+            extra["authority_rank"] = 3 if brand_match and documentation_domain else 2 if documentation_domain or public_authority else 0
             if artifact:
                 extra.update(artifact)
             metadata = RetrievalMetadata(
@@ -160,7 +169,7 @@ class TavilyProvider:
                 source_type="webpage",
                 title=item.get("title"),
                 url=url,
-                domain=domain_from_url(url),
+                domain=domain,
                 published_at=published,
                 retrieved_at=retrieved_at,
                 timestamp=published or retrieved_at,
@@ -180,7 +189,10 @@ class TavilyProvider:
             prior = deduped.get(key)
             if prior is None or result.score > prior.score:
                 deduped[key] = result
-        return list(deduped.values())
+        def authority(item: RetrievalResult) -> tuple[int, float]:
+            return int((item.metadata.extra or {}).get("authority_rank") or 0), item.score
+
+        return sorted(deduped.values(), key=authority, reverse=True)
 
     def _store_raw(self, context: ToolCallContext, raw: dict[str, Any]) -> Optional[dict[str, str]]:
         if self._artifact_store is None:

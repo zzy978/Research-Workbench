@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import uuid
@@ -12,11 +13,13 @@ from deepresearch_agent.harness.checkpoints import CheckpointManager
 from deepresearch_agent.harness.contracts import ContractEvaluator, RunStatus, SourceMode, WorkflowMode
 from deepresearch_agent.harness.evidence import EvidenceLedger
 from deepresearch_agent.harness.event_bus import EventBus
+from deepresearch_agent.harness.errors import RunCancelled
 from deepresearch_agent.harness.recovery import classify_exception, classify_verification_failures
 from deepresearch_agent.harness.run_context import RunContext
 from deepresearch_agent.harness.state_machine import StateMachine
 from deepresearch_agent.context.artifact_edit import ArtifactEditContextBuilder
 from deepresearch_agent.models.prefix_cache import set_current_run
+from deepresearch_agent.harness.report_safety import sanitize_report
 from deepresearch_agent.persistence.artifact_store import ArtifactStore
 from deepresearch_agent.persistence.repositories import (
     ArtifactRepository, CheckpointRepository, ContractRepository, EventRepository,
@@ -24,10 +27,6 @@ from deepresearch_agent.persistence.repositories import (
 )
 
 WorkflowFactory = Callable[[RunContext, EventBus], Any]
-
-
-class RunCancelled(RuntimeError):
-    pass
 
 
 class HarnessRuntime:
@@ -153,7 +152,7 @@ class HarnessRuntime:
 
                 if context.status in {RunStatus.PLANNING, RunStatus.REPLANNING}:
                     failures = list(context.workflow_state.get("verification_failures", []))
-                    await driver.plan(failures or None)
+                    await self._run_with_heartbeat(context, budget, driver.plan(failures or None))
                     context.plan_version += 1
                     context.workflow_state = driver.snapshot()
                     plan_extra: dict[str, Any] = {}
@@ -176,8 +175,18 @@ class HarnessRuntime:
 
                 elif context.status in {RunStatus.EXECUTING, RunStatus.RETRYING}:
                     await self._assert_not_cancelled(context)
+                    plan_record = driver.plan_record()
+                    for task_payload in (plan_record[1] if plan_record else []):
+                        await self.events.publish(
+                            run_id, "task.started", stage="executing",
+                            payload={
+                                "task_id": str(task_payload.get("task_id", "")),
+                                "task_type": str(task_payload.get("task_type", "")),
+                                "description": str(task_payload.get("description", ""))[:120],
+                            },
+                        )
                     try:
-                        await driver.execute()
+                        await self._run_with_heartbeat(context, budget, driver.execute())
                     except Exception as exc:
                         decision = classify_exception(exc)
                         if decision.action == "retry_same":
@@ -197,8 +206,8 @@ class HarnessRuntime:
 
                 elif context.status is RunStatus.REPORTING:
                     await self._assert_not_cancelled(context)
-                    generated_report = await driver.report()
-                    context.report = self._apply_artifact_edit(context, generated_report)
+                    generated_report = await self._run_with_heartbeat(context, budget, driver.report())
+                    context.report = sanitize_report(self._apply_artifact_edit(context, generated_report))
                     await self._assert_not_cancelled(context)
                     context.workflow_state = driver.snapshot()
                     await self._save_report_artifact(context)
@@ -261,7 +270,7 @@ class HarnessRuntime:
                         await self._transition(context, RunStatus.FAILED, event_type="run.failed", error_message=f"Completion Contract 未通过: {', '.join(verdict.failures)}")
 
             return context
-        except RunCancelled:
+        except (RunCancelled, asyncio.CancelledError):
             assert context is not None
             if context.status is not RunStatus.CANCELLING:
                 await self._transition(context, RunStatus.CANCELLING, event_type="run.cancelling")
@@ -339,6 +348,24 @@ class HarnessRuntime:
             context.cancellation_requested = True
             raise RunCancelled("Run 已请求取消")
 
+    async def _run_with_heartbeat(self, context: RunContext, budget: BudgetManager, operation):
+        """Run one long stage while persisting usage and enforcing cancel/budget limits."""
+        task = asyncio.create_task(operation)
+        try:
+            while not task.done():
+                await asyncio.wait({task}, timeout=1.0)
+                self._attach_prefix_usage(context)
+                context.budget_usage = budget.usage
+                budget.assert_available()
+                await self.runs.update_usage(context.run_id, budget.snapshot())
+                if not task.done():
+                    await self._assert_not_cancelled(context)
+            return await task
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
     async def _persist_plan(self, context: RunContext, driver: Any) -> None:
         if self.trajectory is None:
             return
@@ -351,6 +378,7 @@ class HarnessRuntime:
 
     async def _persist_execution(self, context: RunContext, driver: Any, budget: BudgetManager) -> None:
         seen_calls: set[str] = set()
+        published_evidence_ids = {item.evidence_id for item in await self.evidence_repository.list_for_run(context.run_id)}
         records = driver.execution_records()
         reported_tokens = sum(
             self._token_usage_total(record.metadata.token_usage)
@@ -376,11 +404,16 @@ class HarnessRuntime:
                     tool_payload["query"] = str(call.args["query"])[:300]
                 if isinstance(call.result, dict):
                     tool_payload["result_count"] = len(call.result.get("result_ids", []) or [])
+                if not tool_payload.get("result_count") and record.evidence:
+                    tool_payload["result_count"] = len(record.evidence)
                 await self.events.publish(context.run_id, "tool.completed" if call.status != "failed" else "tool.failed", stage="executing", payload=tool_payload)
 
         for task_id, tool_call_id, provider, result in driver.evidence_results():
             saved = await self.evidence_ledger.record_results(run_id=context.run_id, task_id=task_id, tool_call_id=tool_call_id, provider=str(provider), results=[result])
             for item in saved:
+                if item.evidence_id in published_evidence_ids:
+                    continue
+                published_evidence_ids.add(item.evidence_id)
                 await self.events.publish(context.run_id, "evidence.added", stage="executing", payload={"task_id": task_id, "evidence_id": item.evidence_id, "source_mode": item.source_mode.value})
 
     @staticmethod

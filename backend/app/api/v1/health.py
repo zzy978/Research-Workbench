@@ -1,6 +1,7 @@
 """Health and capability discovery without spending model/search quota."""
 
 import asyncio
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends
@@ -44,12 +45,13 @@ async def health(database=Depends(get_database)):
     overall = "healthy" if sqlite_status == "healthy" and llm_status == "healthy" and (neo4j_status == "healthy" or tavily_status == "healthy") else "degraded"
     return {
         "status": overall,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
         "components": {
-            "api": {"status": "healthy"},
-            "sqlite": {"status": sqlite_status},
-            "llm": {"status": llm_status, "configured": llm_configured, "reason": llm_reason},
-            "neo4j": {"status": neo4j_status, "configured": neo4j_configured, "reason": neo4j_reason},
-            "tavily": {"status": tavily_status, "configured": tavily_configured, "reason": tavily_reason, "checked": "configuration_only"},
+            "api": {"status": "healthy", "check_level": "functional"},
+            "sqlite": {"status": sqlite_status, "check_level": "read_write"},
+            "llm": {"status": llm_status, "configured": llm_configured, "reason": llm_reason, "check_level": "tcp_only"},
+            "neo4j": {"status": neo4j_status, "configured": neo4j_configured, "reason": neo4j_reason, "check_level": "tcp_only"},
+            "tavily": {"status": tavily_status, "configured": tavily_configured, "reason": tavily_reason, "check_level": "configuration_only"},
         },
     }
 

@@ -151,7 +151,7 @@ export function CardDetailDrawer({ stageId, run, feed, report, evidence, context
 
       {stageId === "reporting" && (
         <div className="drawer-body">
-          {!report?.content && <div className="drawer-empty">报告生成中…</div>}
+          {!report?.content && <div className="drawer-empty">{run?.status === "cancelled" ? "任务已取消，报告未保存。" : "报告生成中…"}</div>}
           <ReportView report={report} evidence={evidence} onEvidence={onEvidence} />
         </div>
       )}
@@ -190,6 +190,10 @@ export function CardDetailDrawer({ stageId, run, feed, report, evidence, context
           </dl>
           {report?.content && <ReportView report={report} evidence={evidence} onEvidence={onEvidence} />}
         </div>
+      )}
+
+      {run?.status === "cancelled" && stageId !== "reporting" && (
+        <div className="drawer-body"><div className="drawer-empty">任务已取消，不会继续调用模型或生成报告。</div></div>
       )}
     </motion.aside>
   </motion.div>;

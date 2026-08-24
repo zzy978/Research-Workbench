@@ -797,7 +797,7 @@ class ChainOfExplorationSearcher:
         }
         
         # 执行同步探索
-        result = await asyncio.get_event_loop().run_in_executor(None, sync_explore)
+        result = await asyncio.to_thread(sync_explore)
         
         # 更新最终进度
         self.progress_updates["final"] = {

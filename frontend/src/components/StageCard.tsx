@@ -7,6 +7,7 @@ const STATE_LABELS: Record<StageState, string> = {
   pending: "未开始",
   busy: "进行中",
   done: "已完成",
+  cancelled: "已取消",
   error: "异常",
 };
 

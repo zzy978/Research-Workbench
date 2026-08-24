@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from typing import Any
 
 _current_run: ContextVar[str | None] = ContextVar("prefix_cache_run", default=None)
+_cancelled_runs: set[str] = set()
+_cancelled_lock = threading.Lock()
 
 
 def set_current_run(run_id: str | None) -> None:
@@ -28,6 +30,22 @@ def set_current_run(run_id: str | None) -> None:
 
 def get_current_run() -> str | None:
     return _current_run.get()
+
+
+def mark_run_cancelled(run_id: str) -> None:
+    with _cancelled_lock:
+        _cancelled_runs.add(run_id)
+
+
+def clear_run_cancelled(run_id: str) -> None:
+    with _cancelled_lock:
+        _cancelled_runs.discard(run_id)
+
+
+def is_current_run_cancelled() -> bool:
+    run_id = get_current_run()
+    with _cancelled_lock:
+        return bool(run_id and run_id in _cancelled_runs)
 
 
 @dataclass
@@ -75,12 +93,13 @@ def extract_usage(response: Any) -> dict[str, int] | None:
     if hit is None:
         miss = raw.get("prompt_cache_miss_tokens")
         if miss is None:
-            # 网关未报告任何缓存信息（如百炼兼容模式无缓存命中时的响应），
-            # 无法折算命中率：忽略该请求，避免把全部 token 误算为命中，
-            # 否则会产生"命中率恒为 100%"的假数据。
-            return None
-        miss = int(miss)
-        hit = max(0, input_tokens - miss)
+            # 网关未报告缓存明细时仍必须记录真实 token。缓存命中无法证明，
+            # 因而保守地全部记为 miss，避免 Run 用量与 token 预算恒为 0。
+            hit = 0
+            miss = int(input_tokens)
+        else:
+            miss = int(miss)
+            hit = max(0, input_tokens - miss)
     else:
         hit = int(hit)
         miss = max(0, input_tokens - hit)

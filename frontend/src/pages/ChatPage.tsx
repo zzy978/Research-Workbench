@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
 import { api } from "../api/client";
@@ -13,11 +13,11 @@ import { SourceSelector } from "../components/SourceSelector";
 import { arrivedStages, STAGES, StageMeta, StageState, stageCardId } from "../components/stageMeta";
 import { deriveStageFeed, StageFeed } from "../components/stageFeed";
 import { useStagePositions } from "../hooks/useStagePositions";
-import { RUN_POLL_MS, useRunEvents } from "../hooks/useRunEvents";
+import { useRunEvents } from "../hooks/useRunEvents";
 import { Evidence, Run, SourceMode, WorkflowMode } from "../types/api";
 
 const TERMINAL = ["completed", "failed", "cancelled", "budget_exhausted"];
-const ERROR_STATUS = ["failed", "budget_exhausted", "cancelled", "interrupted"];
+const ERROR_STATUS = ["failed", "budget_exhausted", "interrupted"];
 /** 终态/回退阶段（本身不是画板卡片，需回溯到最后一个真实阶段） */
 const NON_CARD_STAGES = ["failed", "cancelled", "budget_exhausted", "interrupted", "retrying", "replanning"];
 
@@ -42,7 +42,10 @@ function stageStateOf(id: string, currentStage: string | null | undefined, statu
   const currentIndex = current ? STAGES.findIndex((stage) => stage.id === current) : -1;
   const idIndex = STAGES.findIndex((stage) => stage.id === id);
   if (idIndex < currentIndex) return "done";
-  if (idIndex === currentIndex) return ERROR_STATUS.includes(status) ? "error" : "busy";
+  if (idIndex === currentIndex) {
+    if (status === "cancelled") return "cancelled";
+    return ERROR_STATUS.includes(status) ? "error" : "busy";
+  }
   return "pending";
 }
 
@@ -67,10 +70,11 @@ function ExecCard({ feed, run }: {feed: StageFeed; run: Run | null}) {
   const toolPct = usage?.tool_calls && limits?.max_tool_calls ? Math.min(100, Math.round((usage.tool_calls / limits.max_tool_calls) * 100)) : 0;
   const cachePct = cacheHitRate(usage?.prefix_cache_hit_tokens, usage?.prefix_cache_miss_tokens);
 
+  const isPlanWorkflow = run?.workflow_mode === "plan_execute_report";
   return <div className="exec-card">
     <div className="iter-rows" ref={listRef}>
-      {rows.length === 0 && <div className="iter-row is-empty">等待研究迭代开始…</div>}
-      {rows.map((row) => (
+      {rows.length === 0 && <div className="iter-row is-empty">{isPlanWorkflow ? `正在执行计划任务 · ${feed.taskCount}/${feed.planTasks.length || feed.taskStartedCount || 1}` : "等待深度研究迭代开始…"}</div>}
+      {!isPlanWorkflow && rows.map((row) => (
         <div key={row.key} className={`iter-row${row.live ? " is-live" : ""}`}>
           <span className="iter-row-label">{row.label}</span>
           <span className="iter-row-sub">{row.sub}</span>
@@ -114,24 +118,37 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
   const [composerCollapsed, setComposerCollapsed] = useState(() => localStorage.getItem("chat.composerCollapsed") === "1");
   const [error, setError] = useState<unknown>(null);
   const [sending, setSending] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const dragMovedRef = useRef(false);
 
   const capabilities = useQuery({ queryKey: ["capabilities"], queryFn: api.capabilities });
   const detail = useQuery({ queryKey: ["session", sessionId], queryFn: () => api.session(sessionId!), enabled: Boolean(sessionId) });
   const { events, run, connection, refresh } = useRunEvents(runId);
-  const evidence = useQuery({ queryKey: ["evidence", runId], queryFn: () => api.evidence(runId!), enabled: Boolean(runId), refetchInterval: run && !TERMINAL.includes(run.status) ? RUN_POLL_MS : false });
-  const report = useQuery({ queryKey: ["report", runId], queryFn: () => api.report(runId!), enabled: Boolean(runId), refetchInterval: run && !TERMINAL.includes(run.status) ? RUN_POLL_MS : false });
-  const contextInspector = useQuery({ queryKey: ["context", runId], queryFn: () => api.context(runId!), enabled: Boolean(runId), refetchInterval: run && !TERMINAL.includes(run.status) ? RUN_POLL_MS : false });
+  const evidence = useQuery({ queryKey: ["evidence", runId], queryFn: () => api.evidence(runId!), enabled: Boolean(runId), refetchInterval: run && !TERMINAL.includes(run.status) ? 5000 : false });
+  const report = useQuery({ queryKey: ["report", runId], queryFn: () => api.report(runId!), enabled: Boolean(runId), refetchInterval: run && !TERMINAL.includes(run.status) ? 5000 : false });
+  const contextInspector = useQuery({ queryKey: ["context", runId], queryFn: () => api.context(runId!), enabled: Boolean(runId), refetchInterval: run && !TERMINAL.includes(run.status) ? 5000 : false });
   const cacheStats = useQuery({ queryKey: ["cacheStats"], queryFn: api.cacheStats, refetchInterval: 5000 });
 
   useEffect(() => { localStorage.setItem("source_mode", source); }, [source]);
   useEffect(() => { localStorage.setItem("chat.stripCollapsed", stripCollapsed ? "1" : "0"); }, [stripCollapsed]);
   useEffect(() => { localStorage.setItem("chat.composerCollapsed", composerCollapsed ? "1" : "0"); }, [composerCollapsed]);
   useEffect(() => {
-    if (!detail.data || runId) return;
+    setRunId(null); setSelectedEvidence(null); setSelectedStage(null); setStopping(false); setError(null);
+  }, [sessionId]);
+  useEffect(() => {
+    if (!detail.data || detail.data.session_id !== sessionId || runId) return;
     const latest = detail.data.runs.find((item) => !TERMINAL.includes(item.status)) ?? detail.data.runs[0];
     if (latest) setRunId(latest.run_id);
-  }, [detail.data, runId]);
+  }, [detail.data, runId, sessionId]);
+  useEffect(() => {
+    if (!run) return;
+    setSource(run.source_mode); setWorkflow(run.workflow_mode);
+  }, [run?.run_id]);
+  useEffect(() => {
+    if (!capabilities.data || capabilities.data.sources[source]?.available) return;
+    const fallback = ([capabilities.data.default_source_mode, "graphrag", "web"] as SourceMode[]).find((mode) => capabilities.data!.sources[mode]?.available);
+    if (fallback) setSource(fallback);
+  }, [capabilities.data, source]);
   useEffect(() => {
     if (run && [...TERMINAL, "needs_user_input"].includes(run.status)) {
       queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
@@ -158,13 +175,30 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
   const { positions, update: updatePosition } = useStagePositions(runId, arrived);
 
   async function submit(event: FormEvent) {
-    event.preventDefault(); if (!sessionId || !text.trim() || sending) return;
+    event.preventDefault();
+    const sourceAvailable = capabilities.data?.sources[source]?.available ?? false;
+    if (!sessionId || !text.trim() || sending || !sourceAvailable || (run && !TERMINAL.includes(run.status))) return;
     setSending(true); setError(null);
     try {
       const result = await api.send(sessionId, { client_message_id: crypto.randomUUID(), content: text.trim(), source_mode: source, workflow_mode: workflow });
       setText(""); setRunId(result.run_id); await queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
     } catch (caught) { setError(caught); } finally { setSending(false); }
   }
+
+  function onComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+      event.preventDefault(); event.currentTarget.form?.requestSubmit();
+    }
+  }
+
+  async function stopRun() {
+    if (!run || stopping) return;
+    setStopping(true); setError(null);
+    try { await api.cancel(run.run_id); await refresh(); }
+    catch (caught) { setError(caught); setStopping(false); }
+  }
+
+  function openEvidence(item: Evidence) { setSelectedStage(null); setSelectedEvidence(item); }
 
   function cardContent(stage: StageMeta): ReactNode {
     switch (stage.id) {
@@ -176,12 +210,12 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
         const tasks = feed.planTasks;
         return <CardSummary
           lines={tasks.length > 0 ? tasks.slice(0, 2).map((task) => `${task.task_type}: ${task.description}`) : ["正在规划研究步骤…"]}
-          meta={`${tasks.length} 个任务`}
+          meta={tasks.length > 2 ? `${tasks.length} 个任务 · 另有 ${tasks.length - 2} 项` : `${tasks.length} 个任务`}
         />;
       }
       case "executing": return <ExecCard feed={feed} run={run} />;
       case "reporting": return <CardSummary
-        lines={[feed.reportChars != null ? `报告已生成 · ${feed.reportChars} 字符` : "正在生成研究报告…"]}
+        lines={[run?.status === "cancelled" ? "任务已取消，未生成报告" : feed.reportChars != null ? `报告已生成 · ${feed.reportChars} 字符` : "正在生成研究报告…"]}
         meta={`${feed.taskCount} 个任务完成`}
       />;
       case "verifying": {
@@ -209,7 +243,7 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
             {" · "}命中 {formatTokens(cacheStats.data.totals.hit_tokens)} / 未命中 {formatTokens(cacheStats.data.totals.miss_tokens)} · {cacheStats.data.totals.requests} 次
           </span>
         )}
-        <span className={`connection-dot${connection === "reconnecting" ? " reconnecting" : ""}`}>{connection === "reconnecting" ? "重连中" : "实时"}</span>
+        <span className={`connection-dot${connection === "reconnecting" ? " reconnecting" : ""}`}>{run && TERMINAL.includes(run.status) ? "已结束" : connection === "reconnecting" ? "重连中" : connection === "connected" ? "实时" : "待连接"}</span>
         <button type="button" className="icon-btn" onClick={() => setStripCollapsed((value) => !value)} title={stripCollapsed ? "展开会话消息" : "折叠会话消息"} aria-label="会话消息">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
@@ -248,14 +282,14 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
         >
           <div className="composer-tools"><SourceSelector value={source} onChange={setSource} capabilities={capabilities.data} /><select value={workflow} onChange={(event) => setWorkflow(event.target.value as WorkflowMode)}><option value="deep_research">DeepResearch</option><option value="plan_execute_report">Plan–Execute–Report</option></select></div>
           {source === "web" && capabilities.data?.sources.web.reason && <small className="capability-note">{capabilities.data.sources.web.reason}</small>}
-          <textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="提出一个需要证据支持的问题…" rows={3} />
-          <div className="composer-actions"><span>Enter 发送 · 每个 Run 冻结当前来源</span>{run && !TERMINAL.includes(run.status) ? <button type="button" className="stop" onClick={() => api.cancel(run.run_id).then(refresh)}>停止</button> : <button className="send" disabled={sending || !text.trim()}>{sending ? "发送中…" : "发送研究 →"}</button>}</div>
+          <textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={onComposerKeyDown} placeholder="提出一个需要证据支持的问题…" rows={3} />
+          <div className="composer-actions"><span>Enter 发送 · Shift+Enter 换行 · 每个 Run 冻结当前来源</span>{run && !TERMINAL.includes(run.status) ? <button type="button" className="stop" disabled={stopping || run.cancellation_requested} onClick={stopRun}>{stopping || run.cancellation_requested ? "正在停止…" : "停止"}</button> : <button className="send" disabled={sending || !text.trim() || !(capabilities.data?.sources[source]?.available ?? false)}>{sending ? "发送中…" : "发送研究 →"}</button>}</div>
         </motion.form>
       )}
     </AnimatePresence>
 
     {run?.status === "needs_user_input" && <ClarificationCard onSubmit={async (content) => { await api.clarify(run.run_id, content); await refresh(); }} />}
     <EvidenceDrawer item={selectedEvidence} onClose={() => setSelectedEvidence(null)} />
-    <AnimatePresence>{selectedStage && run && <CardDetailDrawer stageId={selectedStage} run={run} feed={feed} report={report.data} evidence={evidence.data?.items ?? []} context={contextInspector.data} onEvidence={setSelectedEvidence} onClose={() => setSelectedStage(null)} />}</AnimatePresence>
+    <AnimatePresence>{selectedStage && run && <CardDetailDrawer stageId={selectedStage} run={run} feed={feed} report={report.data} evidence={evidence.data?.items ?? []} context={contextInspector.data} onEvidence={openEvidence} onClose={() => setSelectedStage(null)} />}</AnimatePresence>
   </main>;
 }

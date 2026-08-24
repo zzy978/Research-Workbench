@@ -276,7 +276,7 @@ class BaseAgent(ABC):
             return self._generate_node(state)
             
         # 在线程池中运行同步代码，避免阻塞事件循环
-        return await asyncio.get_event_loop().run_in_executor(None, sync_generate)
+        return await asyncio.to_thread(sync_generate)
     
     def check_fast_cache(self, query: str, thread_id: str = "default") -> str:
         """专用的快速缓存检查方法，用于高性能路径"""

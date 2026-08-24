@@ -38,7 +38,7 @@ class ApiFakeDriver:
         self.executed = True
 
     async def report(self):
-        self._report = f"# 研究报告\n\nAPI 主链结论 [{self.results[0].result_id}]\n\n## 方法\n\n持久 Harness。"
+        self._report = f"# 研究报告\n\nAPI 主链结论已有证据支持 [{self.results[0].result_id}] [{self.results[1].result_id}]\n\n## 方法\n\n持久 Harness。"
         return self._report
 
     async def repair_report(self, failures):
@@ -177,7 +177,9 @@ def test_cancel_queued_run(client):
     run_id = send(client, new_session(client)).json()["run_id"]
     response = client.post(f"/api/v1/runs/{run_id}/cancel")
     assert response.status_code == 200 and response.json()["status"] == "cancelling"
-    assert client.get(f"/api/v1/runs/{run_id}").json()["cancellation_requested"] is True
+    cancelled = client.get(f"/api/v1/runs/{run_id}").json()
+    assert cancelled["cancellation_requested"] is True
+    assert cancelled["status"] == "cancelled"
 
 
 def test_clarification_resumes_same_run(client):

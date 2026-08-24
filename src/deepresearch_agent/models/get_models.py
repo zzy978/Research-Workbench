@@ -16,7 +16,8 @@ from deepresearch_agent.models.bailian_embeddings import (
     BailianOpenAIEmbeddings,
     is_bailian_compatible_url,
 )
-from deepresearch_agent.models.prefix_cache import extract_usage, tracker
+from deepresearch_agent.models.prefix_cache import extract_usage, is_current_run_cancelled, tracker
+from deepresearch_agent.harness.errors import RunCancelled
 
 
 # 设置 tiktoken 缓存目录，避免每次联网拉取
@@ -48,18 +49,26 @@ class PrefixAwareChatOpenAI(ChatOpenAI):
             tracker.record(model=self.model_name or "", usage=usage)
 
     def invoke(self, *args, **kwargs):
+        if is_current_run_cancelled():
+            raise RunCancelled("Run 已请求取消")
         response = super().invoke(*args, **kwargs)
         self._record_usage(response)
         return response
 
     async def ainvoke(self, *args, **kwargs):
+        if is_current_run_cancelled():
+            raise RunCancelled("Run 已请求取消")
         response = await super().ainvoke(*args, **kwargs)
         self._record_usage(response)
         return response
 
     async def astream(self, *args, **kwargs):
+        if is_current_run_cancelled():
+            raise RunCancelled("Run 已请求取消")
         last_chunk = None
         async for chunk in super().astream(*args, **kwargs):
+            if is_current_run_cancelled():
+                raise RunCancelled("Run 已请求取消")
             if isinstance(chunk, AIMessageChunk):
                 last_chunk = chunk
             yield chunk

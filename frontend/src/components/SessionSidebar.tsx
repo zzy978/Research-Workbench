@@ -31,7 +31,7 @@ export function SessionSidebar({ sessions, selected, collapsed, onToggle, onSele
       {sessions.map((session) => (
         <div key={session.session_id} className={`session-row ${selected === session.session_id ? "selected" : ""}`}>
           <button onClick={() => onSelect(session.session_id)} title={collapsed ? session.title : undefined}>
-            {collapsed && <span className="session-dot">{session.title.slice(0, 1)}</span>}
+            <span className="session-dot">{session.title.slice(0, 1)}</span>
             <span className="collapse-fade">{session.title}</span>
             <small className="collapse-fade">{session.status === "archived" ? "已归档" : new Date(session.updated_at).toLocaleDateString()}</small>
           </button>

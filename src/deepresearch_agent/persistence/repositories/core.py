@@ -223,6 +223,16 @@ class RunRepository:
             result = await session.execute(update(RunModel).where(RunModel.run_id == run_id).values(**values))
             return result.rowcount == 1
 
+    async def update_usage(self, run_id: str, usage: dict[str, Any]) -> bool:
+        """Refresh in-flight usage without changing status or clearing errors."""
+        async with self.database.transaction() as session:
+            result = await session.execute(
+                update(RunModel)
+                .where(RunModel.run_id == run_id)
+                .values(usage_json=json_text(usage), updated_at=utc_now_iso())
+            )
+            return result.rowcount == 1
+
     async def complete_verified(self, run_id: str, *, assistant_content: str, usage: dict[str, Any]) -> tuple[MessageModel, bool]:
         """Atomically enforce required checks, complete Run, and append one assistant message."""
         async with self.database.transaction() as session:

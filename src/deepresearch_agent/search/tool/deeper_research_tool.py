@@ -1203,21 +1203,21 @@ class DeeperResearchTool:
         def enhance_wrapper():
             return enhance_search_with_coe(self, query, keywords)
         
-        return await asyncio.get_event_loop().run_in_executor(None, enhance_wrapper)
+        return await asyncio.to_thread(enhance_wrapper)
 
     async def _async_build_graph(self, query, entities):
         """异步构建知识图谱"""
         def build_wrapper():
             return self.knowledge_builder.build_query_graph(query, entities, depth=1)
         
-        return await asyncio.get_event_loop().run_in_executor(None, build_wrapper)
+        return await asyncio.to_thread(build_wrapper)
     
     async def _async_detect_contradictions(self, query_id):
         """异步检测矛盾"""
         def detect_wrapper():
             return detect_and_resolve_contradictions(self, query_id)
         
-        return await asyncio.get_event_loop().run_in_executor(None, detect_wrapper)
+        return await asyncio.to_thread(detect_wrapper)
     
     async def search_stream(self, query_input: Any) -> AsyncGenerator[str, None]:
         """
@@ -1384,7 +1384,7 @@ class DeeperResearchTool:
         def generate_sub_queries():
             return self.query_generator.generate_sub_queries(query)
         
-        initial_sub_queries = await asyncio.get_event_loop().run_in_executor(None, generate_sub_queries)
+        initial_sub_queries = await asyncio.to_thread(generate_sub_queries)
         self._log(f"\n[深度研究] 生成了{len(initial_sub_queries)}个初始子查询: {initial_sub_queries}")
         
         # 显示子查询
@@ -1501,7 +1501,7 @@ class DeeperResearchTool:
             def generate_hypotheses():
                 return self.query_generator.generate_multiple_hypotheses(query, self.llm)
             
-            hypotheses = await asyncio.get_event_loop().run_in_executor(None, generate_hypotheses)
+            hypotheses = await asyncio.to_thread(generate_hypotheses)
             
             if hypotheses:
                 hypothesis_msg = f"\n**探索 {len(hypotheses)} 个可能假设**\n"
@@ -1616,7 +1616,7 @@ class DeeperResearchTool:
                     def generate_hypotheses():
                         return self.query_generator.generate_multiple_hypotheses(query, self.llm)
                     
-                    hypotheses = await asyncio.get_event_loop().run_in_executor(None, generate_hypotheses)
+                    hypotheses = await asyncio.to_thread(generate_hypotheses)
                     
                     if hypotheses:
                         self._log(f"\n[深度研究] 生成了{len(hypotheses)}个新假设，尝试从新角度探索")
@@ -1683,7 +1683,7 @@ class DeeperResearchTool:
                 def generate_followup():
                     return self.query_generator.generate_followup_queries(query, self.deep_research.all_retrieved_info)
                 
-                followup_queries = await asyncio.get_event_loop().run_in_executor(None, generate_followup)
+                followup_queries = await asyncio.to_thread(generate_followup)
                 
                 if followup_queries:
                     self._log(f"\n[深度研究] 生成了{len(followup_queries)}个跟进查询")
@@ -1939,7 +1939,7 @@ class DeeperResearchTool:
                 def check_gap_needed():
                     return len(self.query_generator.generate_followup_queries(query, self.deep_research.all_retrieved_info)) > 0
                 
-                gap_needed = await asyncio.get_event_loop().run_in_executor(None, check_gap_needed)
+                gap_needed = await asyncio.to_thread(check_gap_needed)
                 
                 if not gap_needed:
                     reflection_msg = "\n**已收集到足够的信息，可以开始整合分析了**\n"
@@ -2099,7 +2099,7 @@ class DeeperResearchTool:
                 return self.deep_research._generate_final_answer(query, retrieved_content, think)
         
         # 异步执行答案生成
-        final_answer = await asyncio.get_event_loop().run_in_executor(None, generate_final_answer)
+        final_answer = await asyncio.to_thread(generate_final_answer)
         
         # 获取知识图谱中的核心实体
         central_entities = []

@@ -94,7 +94,7 @@ class FakeDriver:
     async def report(self):
         type(self).report_calls += 1
         dangling = " [ev_missing]" if self.dangling and not self.repaired else ""
-        self._report = f"# 研究报告\n\n结论 [{self.results[0].result_id}]{dangling}\n\n## 方法\n\n基于证据。"
+        self._report = f"# 研究报告\n\n结论内容已有充分说明 [{self.results[0].result_id}]{dangling}\n\n## 方法\n\n基于证据。\n\n## 局限\n\n当前报告仅直接引用一个来源。"
         return self._report
 
     async def repair_report(self, failures):
@@ -391,7 +391,7 @@ async def test_interrupted_stage_resumes_after_latest_safe_checkpoint(
             results=prepared.results,
         )
         context.workflow_state = prepared.snapshot()
-        context.report = f"# 研究报告\n\n结论 [{prepared.results[0].result_id}]\n\n## 方法\n\n基于证据。"
+        context.report = f"# 研究报告\n\n恢复后的结论已有证据支持 [{prepared.results[0].result_id}] [{prepared.results[1].result_id}]\n\n## 方法\n\n基于证据。"
         context.workflow_state["report"] = context.report
     await CheckpointManager(CheckpointRepository(database)).save(context, checkpoint_status.value)
     await RunRepository(database).update_status(run.run_id, status="interrupted", current_stage="interrupted")

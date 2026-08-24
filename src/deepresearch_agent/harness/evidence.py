@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Iterable, Optional
 
 from deepresearch_agent.agents.multi_agent.core.retrieval_result import RetrievalResult
@@ -29,7 +30,7 @@ class EvidenceLedger:
             source_id = result.metadata.source_id
             digest = result.metadata.content_hash or hashlib.sha256(str(result.evidence).encode("utf-8")).hexdigest()
             evidence_id = "ev_" + hashlib.sha256(
-                f"{run_id}:{task_id}:{tool_call_id}:{mode.value}:{source_id}:{digest}".encode("utf-8")
+                f"{run_id}:{mode.value}:{source_id}:{digest}".encode("utf-8")
             ).hexdigest()[:24]
             result.result_id = evidence_id
             result.metadata.content_hash = digest
@@ -49,7 +50,7 @@ class EvidenceLedger:
                 provider=provider,
                 source_id=source_id,
                 title=result.metadata.title,
-                summary=str(result.evidence)[:4000],
+                summary=self._summary(result.evidence),
                 content_hash=digest,
                 artifact_id=str(artifact_id) if artifact_id else None,
                 score=result.score,
@@ -76,6 +77,16 @@ class EvidenceLedger:
         for result, data in assigned:
             await self._repository.upsert(data, metadata=result.metadata.model_dump(mode="json"))
         return saved
+
+    @staticmethod
+    def _summary(value: object, *, limit: int = 1200) -> str:
+        """Produce a compact, readable evidence preview; raw content stays in artifacts."""
+        text = str(value or "")
+        text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)
+        text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
+        text = re.sub(r"(?m)^\s*(登录|注册|导航|首页|菜单|Cookie|隐私|广告).*$", "", text, flags=re.I)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:limit] + ("…" if len(text) > limit else "")
 
 
 __all__ = ["EvidenceLedger"]

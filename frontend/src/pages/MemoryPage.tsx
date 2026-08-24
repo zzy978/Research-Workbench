@@ -9,12 +9,12 @@ const KIND_LABELS: Record<string, string> = {preference: "偏好", fact: "事实
 
 export function MemoryPage() {
   const client = useQueryClient();
-  const [target, setTarget] = useState<"user" | "project">("user");
+  const [target, setTarget] = useState<"user" | "project">("project");
   const [statusFilter, setStatusFilter] = useState("all");
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<CuratedMemory | null>(null);
   const [content, setContent] = useState("");
-  const [kind, setKind] = useState("preference");
+  const [kind, setKind] = useState("note");
   const [provenance, setProvenance] = useState("user:explicit");
   const [activate, setActivate] = useState(false);
   const [expiresAt, setExpiresAt] = useState("");

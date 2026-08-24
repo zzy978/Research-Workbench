@@ -111,7 +111,7 @@ def test_extract_usage_miss_only_gateway() -> None:
     assert usage["miss_tokens"] == 25
 
 
-def test_extract_usage_ignores_request_without_cache_report() -> None:
+def test_extract_usage_counts_request_without_cache_report_as_miss() -> None:
     """百炼等网关不报告任何缓存字段（prompt_cache_hit/miss_tokens 均为 null）时，
     无法折算命中率，应忽略该请求而不是把全部 token 误算为命中。"""
     response = AIMessage(
@@ -125,7 +125,13 @@ def test_extract_usage_ignores_request_without_cache_report() -> None:
             }
         },
     )
-    assert extract_usage(response) is None
+    assert extract_usage(response) == {
+        "requests": 1,
+        "input_tokens": 80,
+        "hit_tokens": 0,
+        "miss_tokens": 80,
+        "output_tokens": 10,
+    }
 
 
 def test_extract_usage_explicit_zero_miss_means_full_hit() -> None:

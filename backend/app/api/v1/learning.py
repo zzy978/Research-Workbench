@@ -80,7 +80,11 @@ async def delete_memory(memory_id: str, memory_service=Depends(get_memory_servic
 async def list_skills(database=Depends(get_database)):
     async with database.sessions() as session:
         versions = list((await session.execute(select(SkillVersionModel).order_by(SkillVersionModel.name, SkillVersionModel.created_at.desc()))).scalars())
-        candidates = list((await session.execute(select(SkillCandidateModel).order_by(SkillCandidateModel.created_at.desc()))).scalars())
+        candidates = list((await session.execute(
+            select(SkillCandidateModel)
+            .where(SkillCandidateModel.status.in_(("candidate", "evaluated")))
+            .order_by(SkillCandidateModel.created_at.desc())
+        )).scalars())
     return {
         "versions": [{"skill_version_id": item.skill_version_id, "name": item.name, "version": item.version, "status": item.status, "source_run_ids": json.loads(item.source_run_ids_json or "[]"), "created_at": item.created_at} for item in versions],
         "candidates": [{"candidate_id": item.candidate_id, "run_id": item.run_id, "name": item.name, "proposed_version": item.proposed_version, "status": item.status, "payload": json.loads(item.payload_json or "{}"), "created_at": item.created_at} for item in candidates],

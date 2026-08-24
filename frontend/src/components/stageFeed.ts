@@ -25,6 +25,7 @@ export interface StageFeed {
   tools: ToolEntry[];
   contextCount: number;
   taskCount: number;
+  taskStartedCount: number;
   /** 冻结 Memory / 历史召回 / 复用消息（context.completed payload） */
   contextInfo?: { memories: number; usedMessages: number; historicalRecall: number; tokens: number };
   reportChars?: number;
@@ -85,8 +86,15 @@ function parsePlanTasks(events: RunEvent[]): PlanTask[] {
 }
 
 function parseTools(events: RunEvent[]): ToolEntry[] {
+  const seen = new Set<string>();
   return events
-    .filter((event) => event.event_type === "tool.completed")
+    .filter((event) => {
+      if (event.event_type !== "tool.completed") return false;
+      const key = stringOr(event.tool_call_id, `${event.task_id}:${event.tool_name}:${event.query}`);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
     .map((event) => ({
       tool_name: stringOr(event.tool_name),
       query: typeof event.query === "string" ? event.query : undefined,
@@ -141,8 +149,9 @@ export function deriveStageFeed(events: RunEvent[], report?: Report | null): Sta
     liveSearches,
     planTasks: parsePlanTasks(events),
     tools: parseTools(events),
-    contextCount: events.filter((event) => event.event_type === "evidence.added").length,
-    taskCount: events.filter((event) => event.event_type === "task.completed").length,
+    contextCount: new Set(events.filter((event) => event.event_type === "evidence.added").map((event) => stringOr(event.evidence_id))).size,
+    taskCount: new Set(events.filter((event) => event.event_type === "task.completed").map((event) => stringOr(event.task_id))).size,
+    taskStartedCount: new Set(events.filter((event) => event.event_type === "task.started").map((event) => stringOr(event.task_id))).size,
     contextInfo,
     reportChars: typeof reportEvent?.characters === "number" ? reportEvent.characters : undefined,
     verifyFailures,

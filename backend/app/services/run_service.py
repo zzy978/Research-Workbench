@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
 from typing import Any
 
@@ -27,7 +28,7 @@ from deepresearch_agent.memory import MemoryExtractor, MemoryService
 from deepresearch_agent.sessions import SessionSearchService
 from deepresearch_agent.config import settings
 from deepresearch_agent.evolution import SkillLoader, SkillRegistry, TrajectoryDistiller
-from deepresearch_agent.models.prefix_cache import tracker as prefix_tracker
+from deepresearch_agent.models.prefix_cache import clear_run_cancelled, mark_run_cancelled, tracker as prefix_tracker
 from deepresearch_agent.models.get_models import get_llm_model
 from deepresearch_agent.retrieval.router import create_default_router
 from deepresearch_agent.retrieval.base import TimeoutBoundProvider
@@ -109,6 +110,7 @@ class RunService:
         existing = self._tasks.get(run_id)
         if existing is not None and not existing.done():
             return existing
+        clear_run_cancelled(run_id)
         task = asyncio.create_task(self._execute(run_id), name=f"run:{run_id}")
         self._tasks[run_id] = task
         task.add_done_callback(lambda _task: self._tasks.pop(run_id, None))
@@ -159,7 +161,22 @@ class RunService:
         return run_ids
 
     async def cancel(self, run_id: str) -> bool:
-        return await self.runs.request_cancel(run_id)
+        requested = await self.runs.request_cancel(run_id)
+        if not requested:
+            return False
+        mark_run_cancelled(run_id)
+        task = self._tasks.get(run_id)
+        if task is not None and not task.done():
+            task.cancel()
+        else:
+            run = await self.runs.get(run_id)
+            if run is not None:
+                await self.runs.update_status(
+                    run_id, status="cancelled", current_stage="cancelled",
+                    usage=json.loads(run.usage_json or "{}"),
+                )
+                await self.event_bus.publish(run_id, "run.cancelled", stage="cancelled", payload={"status": "cancelled"})
+        return True
 
     async def resume(self, run_id: str, *, clarification: str | None = None) -> bool:
         resumed = await self.runs.resume(run_id, clarification=clarification)
