@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from typing import Any, Protocol
 
@@ -91,9 +92,10 @@ def _evidence_only_report(
 class PlanExecuteReportDriver:
     """Thin staged wrapper around the existing Planner/Worker/Reporter components."""
 
-    def __init__(self, context: RunContext, orchestrator: MultiAgentOrchestrator):
+    def __init__(self, context: RunContext, orchestrator: MultiAgentOrchestrator, *, events=None):
         self.context = context
         self.orchestrator = orchestrator
+        self.events = events
         self.state = PlanExecuteState(
             session_id=context.session_id, run_id=context.run_id,
             source_mode=context.source_mode.value, workflow_mode=context.workflow_mode.value,
@@ -144,6 +146,16 @@ class PlanExecuteReportDriver:
             - REPORT_RESERVED_TOKENS
             - VERIFICATION_RESERVED_TOKENS,
         )
+        loop = asyncio.get_running_loop()
+
+        def progress_callback(kind, task, record):
+            if self.events is None:
+                return
+            future = asyncio.run_coroutine_threadsafe(
+                self._publish_execution_progress(kind, task, record), loop,
+            )
+            future.result(timeout=10)
+
         records = await asyncio.to_thread(
             self.orchestrator.execute,
             self.state,
@@ -151,9 +163,58 @@ class PlanExecuteReportDriver:
             stop_predicate=lambda: (
                 self.context.budget_usage.llm_tokens >= execution_token_ceiling
             ),
+            progress_callback=progress_callback,
         )
         existing = {item.record_id for item in self.state.execution_records}
         self.state.execution_records.extend(item for item in records if item.record_id not in existing)
+
+    async def _publish_execution_progress(self, kind, task, record) -> None:
+        task_payload = {
+            "task_id": task.task_id,
+            "task_type": task.task_type,
+            "description": task.description[:300],
+        }
+        if kind == "task.started" or record is None:
+            await self.events.publish(
+                self.context.run_id, "task.started", stage="executing", payload=task_payload,
+            )
+            return
+
+        for call in record.tool_calls:
+            payload = {
+                **task_payload,
+                "tool_call_id": call.tool_call_id,
+                "tool_name": call.tool_name,
+                "status": call.status,
+            }
+            if isinstance(call.args, dict) and call.args.get("query"):
+                payload["query"] = str(call.args["query"])[:300]
+            if isinstance(call.result, dict):
+                result_ids = call.result.get("result_ids", []) or []
+                payload["result_count"] = len(result_ids) or len(record.evidence)
+                rendered = json.dumps(call.result, ensure_ascii=False, default=str)
+                payload["output_preview"] = rendered[:4000]
+                payload["output_truncated"] = len(rendered) > 4000
+            await self.events.publish(
+                self.context.run_id,
+                "tool.completed" if call.status != "failed" else "tool.failed",
+                stage="executing",
+                payload=payload,
+            )
+        failed = any(call.status == "failed" for call in record.tool_calls) or (
+            record.reflection is not None and not record.reflection.success
+        )
+        await self.events.publish(
+            self.context.run_id,
+            "task.failed" if failed else "task.completed",
+            stage="executing",
+            payload={
+                **task_payload,
+                "record_id": record.record_id,
+                "status": "failed" if failed else "completed",
+                "evidence_count": len(record.evidence),
+            },
+        )
 
     async def report(self) -> str:
         if self._repair_pending and self.report_result is not None:

@@ -1,11 +1,15 @@
-"""Persistent Session and message commands."""
+"""Persistent Session, message commands and full-chain whiteboard reads."""
+
+import json
 
 from fastapi import APIRouter, Depends, Query, Response, status
+from sqlalchemy import select
 
 from backend.app.dependencies import get_chat_service, get_database
 from backend.app.schemas import MessageSend, SessionCreate, SessionPatch
 from deepresearch_agent.harness.errors import AppError, ErrorCode
 from deepresearch_agent.persistence.repositories import MessageRepository, RunRepository, SessionRepository
+from deepresearch_agent.persistence.models import MessageModel, RunEventModel, RunModel, ToolCallModel
 from deepresearch_agent.sessions import SessionSearchService
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -70,6 +74,75 @@ async def get_session(
         for run in runs
     ]
     return result
+
+
+@router.get("/{session_id}/whiteboard")
+async def get_session_whiteboard(session_id: str, database=Depends(get_database)):
+    """Return a durable chronological log of messages, Run events and tool I/O."""
+    item = await SessionRepository(database).get(session_id)
+    if item is None:
+        raise AppError(ErrorCode.NOT_FOUND, "Session 不存在")
+    async with database.sessions() as session:
+        messages = list((await session.execute(
+            select(MessageModel).where(MessageModel.session_id == session_id)
+            .order_by(MessageModel.created_at, MessageModel.message_id)
+        )).scalars())
+        runs = list((await session.execute(
+            select(RunModel).where(RunModel.session_id == session_id)
+            .order_by(RunModel.created_at, RunModel.run_id)
+        )).scalars())
+        run_ids = [run.run_id for run in runs]
+        events = [] if not run_ids else list((await session.execute(
+            select(RunEventModel).where(RunEventModel.run_id.in_(run_ids))
+            .order_by(RunEventModel.created_at, RunEventModel.event_id)
+        )).scalars())
+        tools = [] if not run_ids else list((await session.execute(
+            select(ToolCallModel).where(ToolCallModel.run_id.in_(run_ids))
+            .order_by(ToolCallModel.created_at, ToolCallModel.tool_call_id)
+        )).scalars())
+
+    entries = []
+    for message in messages:
+        entries.append({
+            "id": f"message:{message.message_id}", "kind": "message",
+            "run_id": message.run_id, "created_at": message.created_at,
+            "label": "用户消息" if message.role == "user" else "AI 回复" if message.role == "assistant" else "系统消息",
+            "status": message.role, "content": message.content,
+            "payload": {"message_id": message.message_id, "role": message.role},
+        })
+    for event in events:
+        payload = json.loads(event.payload_json or "{}")
+        entries.append({
+            "id": f"event:{event.event_id}", "kind": "event",
+            "run_id": event.run_id, "created_at": event.created_at,
+            "label": event.event_type, "status": event.stage,
+            "content": payload.get("description") or payload.get("query") or payload.get("error_message") or "",
+            "payload": payload,
+        })
+    for tool in tools:
+        entries.append({
+            "id": f"tool:{tool.tool_call_id}", "kind": "tool",
+            "run_id": tool.run_id, "created_at": tool.completed_at or tool.created_at,
+            "label": tool.tool_name, "status": tool.status,
+            "content": "工具调用与完整输出",
+            "payload": {
+                "tool_call_id": tool.tool_call_id, "task_id": tool.task_id,
+                "source_mode": tool.source_mode,
+                "args": json.loads(tool.args_json or "{}"),
+                "result": json.loads(tool.result_json) if tool.result_json else None,
+                "error_code": tool.error_code,
+            },
+        })
+    entries.sort(key=lambda value: (value["created_at"], value["id"]))
+    return {
+        "session_id": session_id,
+        "title": item.title,
+        "entries": entries,
+        "counts": {
+            "messages": len(messages), "runs": len(runs),
+            "events": len(events), "tools": len(tools),
+        },
+    }
 
 
 @router.patch("/{session_id}")

@@ -176,16 +176,6 @@ class HarnessRuntime:
 
                 elif context.status in {RunStatus.EXECUTING, RunStatus.RETRYING}:
                     await self._assert_not_cancelled(context)
-                    plan_record = driver.plan_record()
-                    for task_payload in (plan_record[1] if plan_record else []):
-                        await self.events.publish(
-                            run_id, "task.started", stage="executing",
-                            payload={
-                                "task_id": str(task_payload.get("task_id", "")),
-                                "task_type": str(task_payload.get("task_type", "")),
-                                "description": str(task_payload.get("description", ""))[:120],
-                            },
-                        )
                     try:
                         await self._run_with_heartbeat(context, budget, driver.execute())
                     except Exception as exc:
@@ -542,6 +532,15 @@ class HarnessRuntime:
 
     async def _persist_execution(self, context: RunContext, driver: Any, budget: BudgetManager) -> None:
         seen_calls: set[str] = set()
+        live_events = await self.events.repository.list_after(context.run_id)
+        live_task_ids = {
+            str(json.loads(item.payload_json or "{}").get("task_id", ""))
+            for item in live_events if item.event_type in {"task.completed", "task.failed"}
+        }
+        live_tool_ids = {
+            str(json.loads(item.payload_json or "{}").get("tool_call_id", ""))
+            for item in live_events if item.event_type in {"tool.completed", "tool.failed"}
+        }
         published_evidence_ids = {item.evidence_id for item in await self.evidence_repository.list_for_run(context.run_id)}
         records = driver.execution_records()
         reported_tokens = sum(
@@ -551,7 +550,8 @@ class HarnessRuntime:
         if reported_tokens:
             budget.observe_tokens(reported_tokens)
         for record in records:
-            await self.events.publish(context.run_id, "task.completed", stage="executing", payload={"task_id": record.task_id, "evidence_count": len(record.evidence)})
+            if record.task_id not in live_task_ids:
+                await self.events.publish(context.run_id, "task.completed", stage="executing", payload={"task_id": record.task_id, "evidence_count": len(record.evidence)})
             for call in record.tool_calls:
                 if call.tool_call_id in seen_calls:
                     continue
@@ -570,7 +570,8 @@ class HarnessRuntime:
                     tool_payload["result_count"] = len(call.result.get("result_ids", []) or [])
                 if not tool_payload.get("result_count") and record.evidence:
                     tool_payload["result_count"] = len(record.evidence)
-                await self.events.publish(context.run_id, "tool.completed" if call.status != "failed" else "tool.failed", stage="executing", payload=tool_payload)
+                if call.tool_call_id not in live_tool_ids:
+                    await self.events.publish(context.run_id, "tool.completed" if call.status != "failed" else "tool.failed", stage="executing", payload=tool_payload)
 
         for task_id, tool_call_id, provider, result in driver.evidence_results():
             saved = await self.evidence_ledger.record_results(run_id=context.run_id, task_id=task_id, tool_call_id=tool_call_id, provider=str(provider), results=[result])

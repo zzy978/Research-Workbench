@@ -37,7 +37,7 @@ export function useRunEvents(runId?: string | null) {
         setEvents((items) => items.some((item) => item.event_id === data.event_id) ? items : [...items, data]);
         if (String(data.event_type).startsWith("run.")) sync();
       };
-      ["run.queued", "run.started", "run.stage_changed", "run.completed", "run.failed", "run.cancelled", "run.budget_exhausted", "run.needs_user_input", "plan.created", "plan.revised", "task.started", "task.completed", "tool.completed", "evidence.added", "report.completed", "verification.completed", "agent.progress", "iteration.completed"].forEach((name) => source?.addEventListener(name, handle));
+      ["run.queued", "run.started", "run.stage_changed", "run.completed", "run.failed", "run.cancelled", "run.budget_exhausted", "run.needs_user_input", "plan.created", "plan.revised", "task.started", "task.completed", "task.failed", "tool.completed", "tool.failed", "evidence.added", "report.completed", "verification.completed", "agent.progress", "iteration.completed"].forEach((name) => source?.addEventListener(name, handle));
       source.onerror = () => {
         source?.close(); setConnection("reconnecting");
         sync().then((value) => {

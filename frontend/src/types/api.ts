@@ -28,6 +28,15 @@ export interface Evidence {
 }
 export interface Report { run_id: string; status: string; content?: string | null; verification: Array<{kind: string; required: boolean; passed?: boolean | null; evidence: Record<string, unknown>}>; }
 export interface RunEvent { event_id?: number; event_type: string; stage?: string; [key: string]: unknown; }
+export interface WhiteboardEntry {
+  id: string; kind: "message" | "event" | "tool"; run_id?: string | null;
+  created_at: string; label: string; status?: string | null; content: string;
+  payload: Record<string, unknown>;
+}
+export interface WhiteboardLog {
+  session_id: string; title: string; entries: WhiteboardEntry[];
+  counts: {messages: number; runs: number; events: number; tools: number};
+}
 export interface Capability { available: boolean; reason?: string | null; }
 export interface Capabilities { sources: Record<SourceMode, Capability>; workflows: WorkflowMode[]; default_source_mode: SourceMode; }
 

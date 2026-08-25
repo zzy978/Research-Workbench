@@ -1,40 +1,294 @@
-# DeepResearch HybridRAG Agent（Hermes Inspired Local MVP）
+<h1 align="center">DeepReseach Agent Harness</h1>
 
-一个多智能体深度研究系统：结合**私有知识图谱与联网搜索**双信息源，引入 Harness Runtime、四层持久化 Memory 与受控自进化（Skills）闭环，并通过 React 前端 + FastAPI 后端提供完整的聊天式研究体验。
+<p align="center">
+  <strong>面向复杂研究任务的可恢复、多智能体、证据驱动 Agent Runtime</strong>
+</p>
 
----
+<p align="center">
+  <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white">
+  <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white">
+  <img alt="React" src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black">
+  <img alt="Neo4j" src="https://img.shields.io/badge/Neo4j-5.22-4581C3?logo=neo4j&logoColor=white">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-134%20passed-22A06B">
+  <img alt="Evidence" src="https://img.shields.io/badge/evidence%20coverage-100%25-7C3AED">
+</p>
 
-## 项目概述
+<p align="center">
+  <a href="#核心亮点">核心亮点</a> ·
+  <a href="#系统架构">系统架构</a> ·
+  <a href="#快速启动">快速启动</a> ·
+  <a href="#测试与评测">测试与评测</a> ·
+  <a href="#常用-api">API</a>
+</p>
 
-系统围绕三个核心概念构建：
+> 以可恢复的 **Agent Harness** 为运行底座，驱动 **Context → Plan → Execute → Report → Verify → Replan** 闭环，统一接入私域 GraphRAG 与 Web 搜索，并提供全量证据上下文压缩、持久化执行、实时可观测、受控自进化和系统化 Agent 评测能力。
 
-- **Session（会话）**——多轮对话的长期容器，保存消息历史、摘要、来源选择与关联运行，支持服务重启后继续聊天。
-- **Run（运行）**——一条用户消息触发的一次研究任务，具有独立状态、信息源、预算、计划、证据、报告与 checkpoint，支持中断恢复与取消。
-- **Harness（编排运行时）**——统一包裹 DeepResearch、Fusion 与多智能体 Plan–Execute–Report 三种工作流，提供 Completion Contract、预算控制、事件流与持久化。
-
-前端每次发送消息须二选一指定信息源（`graphrag` 私有库 / `web` 联网搜索），本轮检索只允许调用选定来源，报告中每条引用明确标注 `[私有库]` 或 `[Web]`。
-
-### 技术栈
-
-| 层 | 技术 |
-|---|---|
-| 后端 | Python 3.10/3.11、FastAPI、SSE（sse-starlette）、Uvicorn、SQLAlchemy + SQLite（aiosqlite）、Alembic |
-| 核心引擎 | LangGraph、LangChain、Tavily、GraphRAG（Neo4j 5.22 + APOC + GDS）、HanLP、Faiss、SentenceTransformers |
-| 前端 | React 18 + TypeScript + Vite、zustand、react-markdown、motion |
-| 部署 | Docker Compose（Neo4j）、本地单机单 worker |
+系统关注的不只是“生成一篇报告”，而是让长时间、多步骤、强证据约束的 Agent 任务能够可靠执行、失败恢复、过程审计、结果验证和持续演进。
 
 ---
 
 ## 核心亮点
 
-1. **双信息源二选一**：统一 `RetrievalProvider` 抽象，`graphrag`（私有知识图谱）与 `web`（Tavily）每轮严格互斥；跨轮可切换，来源切换不污染证据链。
-2. **Harness Runtime + Agent Loop**：三类工作流（DeepResearch / Fusion / Plan–Execute–Report）统一纳入运行时，附带 Completion Contract 逐项验证、墙钟/调用/Token 预算、错误重试分类、事件总线与审计轨迹。
-3. **多智能体 Plan–Execute–Report**：Planner 规划 → 并行/串行 Worker 执行（含 Reflection 反思重试）→ Reporter 写作；支持一致性检查与 Map-Reduce 长文档模式；并行 Worker 使用隔离状态快照，Coordinator 单线程归并。
-4. **四层持久化 Memory**：会话摘要、情节（episodic）、语义（semantic）记忆与上下文组装器；支持代词/省略式追问与跨会话召回，服务重启后依然有效。
-5. **受控自进化（Skills）**：成功运行轨迹蒸馏为候选 Skill → 离线评测 → **人工门禁 promote** 才生效 → 版本管理与一键回滚；未通过门禁的候选不会进入运行链。
-6. **崩溃恢复**：Run/Event/Checkpoint 持久化，`executing` 状态中断后服务重启可自动恢复，前端通过 SSE 事件回放补齐进度。
-7. **可观测性**：SSE 增量事件流（计划、工具调用、证据、阶段状态）实时推送，报告与引用逐条对应 Evidence Ledger，取消/恢复/澄清接口完备。
-8. **本地 MVP 交付**：SQLite + Neo4j + 文件全部落在项目 `data/` 目录；8 个端到端场景验收 PASS，离线门禁 `70 passed`。
+### 1. 可恢复 Agent Harness
+
+Harness Runtime 将 DeepResearch、Fusion 和多智能体 Plan–Execute–Report 工作流统一封装为持久化执行协议：
+
+- Session / Run 状态机管理会话与单次研究任务；
+- Lease、版本化 Checkpoint 和幂等 ToolCall 防止重复副作用；
+- Token、工具调用、并发数、重试次数和墙钟时间多维预算控制；
+- 支持取消、澄清、中断恢复、错误分类重试和动态 Replan；
+- Completion Contract 在 Run 完成前执行强制质量门禁。
+
+### 2. 闭环 Agent Loop
+
+~~~mermaid
+flowchart LR
+    U([User Request]) --> C[Context Build]
+    C --> P[Plan]
+    P --> E[Execute]
+    E --> R[Report]
+    R --> V{Completion Contract}
+
+    V -->|8/8 Pass| DONE([Verified Completion])
+    V -->|Report defect| FIX[Targeted Repair]
+    V -->|Evidence gap| RP[Dynamic Replan]
+    V -->|Budget / permission blocked| FAIL([Honest Failure])
+
+    FIX --> R
+    RP --> P
+
+    M[(Memory)] -. bounded context .-> C
+    H[(Session History)] -. on-demand recall .-> C
+    S[(Approved Skills)] -. procedural guidance .-> C
+    T[[Tools / Workers]] <--> E
+    EL[(Evidence Ledger)] --> R
+    EL --> V
+
+    classDef entry fill:#111827,color:#fff,stroke:#111827,stroke-width:2px;
+    classDef stage fill:#EEF2FF,color:#312E81,stroke:#6366F1,stroke-width:1.5px;
+    classDef decision fill:#FFF7ED,color:#9A3412,stroke:#F97316,stroke-width:2px;
+    classDef success fill:#ECFDF5,color:#065F46,stroke:#10B981,stroke-width:2px;
+    classDef failure fill:#FEF2F2,color:#991B1B,stroke:#EF4444,stroke-width:2px;
+    classDef store fill:#F8FAFC,color:#334155,stroke:#94A3B8,stroke-dasharray: 5 4;
+
+    class U entry;
+    class C,P,E,R,FIX,RP stage;
+    class V decision;
+    class DONE success;
+    class FAIL failure;
+    class M,H,S,EL store;
+~~~
+
+Planner 将研究问题拆解为 DAG 任务图，Worker 在隔离状态中串行或并行执行，Coordinator 确定性归并结果；Reflection、缺口分析和矛盾检测用于修复局部失败，避免一次模型异常导致整条研究链路失效。
+
+### 3. 全量 Evidence Card 上下文工程
+
+系统不精选或丢弃证据，而是将全部原始证据写入不可变 Evidence Ledger，再为每条证据生成可追溯的 Evidence Card：
+
+- 原始证据完整保留，压缩卡始终回指稳定 evidence_id；
+- 按报告章节路由相关 Card，避免每章重复注入全部原文；
+- 章节超预算时执行分批 Map、Digest 和递归 Reduce；
+- 阶段预算为报告和验证预留 Token；
+- 全量证据附录与覆盖门禁确保任何证据都不会被静默遗漏。
+
+| 上下文工程指标 | 优化效果 |
+|---|---:|
+| 累计上下文暴露量 | **↓ 93.58%** |
+| 跨章节重复注入 | **↓ 80.00%** |
+| 单章节最大证据上下文 | **↓ 97.48%** |
+| 真实链路 LLM Token | **↓ 19.23%** |
+| 全量证据覆盖率 | **100%** |
+
+> 固定条件：58 条证据、5 个章节，原始证据完整保留。详见 [上下文冗余优化评测报告](docs/CONTEXT_REDUNDANCY_EVALUATION_REPORT.md)。
+
+### 4. 持久化与全链路可观测
+
+- SQLite 持久化 Session、Message、Run、Plan、Task、ToolCall、Evidence、Contract、Checkpoint、Memory、Skill 与审计记录；
+- SSE 实时推送阶段变化、任务开始、工具输出、证据入账、报告生成和验证结果；
+- “白板”按时间线展示每轮对话、AI 回复、Run 事件、工具参数与完整输出；
+- 服务重启后可从 Checkpoint 恢复，并通过 Durable Event Replay 补齐前端进度；
+- Evidence Ledger 打通“检索来源 → 工具调用 → 任务 → 报告引用 → 验证门禁”证据链。
+
+### 5. 受控自进化
+
+系统从验证通过的高质量 Run 轨迹中蒸馏 Skill Candidate，形成受控演进闭环：
+
+~~~mermaid
+flowchart LR
+    A([Verified<br/>Trajectory]) --> B[Skill<br/>Distillation]
+    B --> C{Lint & Safety}
+    C -->|Reject| X([Rejected])
+    C -->|Pass| D[Offline<br/>Evaluation]
+    D -->|Regression| X
+    D -->|Passed| E{Human<br/>Promote Gate}
+    E -->|Hold| H([Candidate])
+    E -->|Approve| F[(Versioned<br/>Skill Registry)]
+    F --> G[Progressive Load]
+    G --> I[Runtime Feedback]
+    I -. new verified trajectory .-> A
+    F -->|Rollback| PREV[Previous Version]
+
+    classDef source fill:#111827,color:#fff,stroke:#111827;
+    classDef process fill:#EEF2FF,color:#312E81,stroke:#6366F1;
+    classDef gate fill:#FFF7ED,color:#9A3412,stroke:#F97316,stroke-width:2px;
+    classDef success fill:#ECFDF5,color:#065F46,stroke:#10B981;
+    classDef reject fill:#FEF2F2,color:#991B1B,stroke:#EF4444;
+    classDef store fill:#F5F3FF,color:#5B21B6,stroke:#8B5CF6;
+
+    class A source;
+    class B,D,G,I,PREV process;
+    class C,E gate;
+    class F store;
+    class H success;
+    class X reject;
+~~~
+
+候选 Skill 在通过安全检查和离线评测前不会进入运行链；启用必须经过人工 Promote，支持版本管理和一键回滚。Skill 只沉淀程序性经验，不会扩大当前 Run 的信息源和工具权限。
+
+### 6. Memory 与长会话上下文
+
+- 持久化 Curated Memory 仅保存跨 Session 有价值的原子偏好、事实、决策或经验；
+- 会话历史、Session Summary 与 FTS5 Episodic Recall 按需加载，不与长期 Memory 混为一体；
+- Query Resolver 支持代词、省略和多轮追问消歧；
+- Memory 有来源引用、容量上限、生命周期和人工确认门禁；
+- 完整 AI 回复、研究报告、推理文本和研究证据不会被错误写入长期 Memory。
+
+### 7. Agent 评测与完成门禁
+
+Completion Contract 对每个报告执行 8 项强制检查：
+
+| 证据与主张 | 报告与来源 |
+|---|---|
+| Citation Integrity | Report Consistency |
+| Claim Support | Required Sections |
+| Evidence Card Coverage | Source Diversity |
+| Minimum Evidence | Source Match |
+
+评测系统直接读取持久化运行轨迹，统计：
+
+- Verified / First-pass Completion Rate；
+- Required Contract Pass Rate 与 Citation Validity；
+- Recovery、Replan、Checkpoint Integrity 和重复副作用率；
+- P50/P95 Latency、Tokens per Verified Run、Tool Calls per Run；
+- Prefix Cache Hit Rate；
+- 提供 Gold Evidence 时的 Precision@K、Recall@K、MRR、nDCG@K；
+- 提供人工或独立 Judge 标签时的 Semantic Claim Support、Report Quality 与 Honest Failure Rate。
+
+---
+
+## 系统架构
+
+~~~mermaid
+flowchart TB
+    subgraph UI["Experience Layer · React Console"]
+        direction LR
+        CANVAS[Research Canvas]
+        STREAM[Realtime SSE]
+        WHITE[Whiteboard]
+        MEMUI[Memory]
+        SKILLUI[Skills]
+    end
+
+    subgraph API["Control Plane · FastAPI"]
+        direction LR
+        SESSION[Session API]
+        SCHED[Run Scheduler]
+        EVENT[Event Stream]
+        EVALAPI[Evaluation API]
+    end
+
+    subgraph HARNESS["Agent Harness Runtime"]
+        direction TB
+        CORE[State Machine · Lease · Budget]
+        RELIABILITY[Checkpoint · Recovery · Idempotency]
+        GOVERNANCE[Completion Contract · Source Policy]
+        OBS[Evidence Ledger · Audit Trail]
+        CORE --> RELIABILITY --> GOVERNANCE --> OBS
+    end
+
+    subgraph INTELLIGENCE["Agent Intelligence"]
+        direction LR
+        subgraph RESEARCH["Multi-Agent Research"]
+            PLAN[Planner]
+            WORK[Worker DAG]
+            REFLECT[Reflection]
+            REPORT[Reporter]
+            PLAN --> WORK --> REFLECT --> REPORT
+            REFLECT -. retry / replan .-> PLAN
+        end
+        subgraph CONTEXT["Context & Evolution"]
+            CTX[Context Builder]
+            MEMORY[Curated Memory]
+            RECALL[FTS5 Recall]
+            SKILLS[Skill Registry]
+            EVOLVE[Distill · Eval · Promote]
+            MEMORY --> CTX
+            RECALL --> CTX
+            SKILLS --> CTX
+            EVOLVE --> SKILLS
+        end
+    end
+
+    subgraph DATA["Evidence & Data Plane"]
+        direction LR
+        WEB[(Tavily Web)]
+        GRAPH[(Neo4j GraphRAG)]
+        SQL[(SQLite)]
+        ART[(Artifact Store)]
+        VECTOR[(Faiss / Embeddings)]
+    end
+
+    UI -->|REST / SSE| API
+    API --> HARNESS
+    HARNESS --> RESEARCH
+    HARNESS --> CONTEXT
+    WORK --> WEB
+    WORK --> GRAPH
+    REPORT --> ART
+    HARNESS <--> SQL
+    GRAPH <--> VECTOR
+    REPORT --> OBS
+    OBS --> GOVERNANCE
+
+    classDef layer fill:#0F172A,color:#fff,stroke:#0F172A,stroke-width:2px;
+    classDef control fill:#E0F2FE,color:#075985,stroke:#0EA5E9;
+    classDef runtime fill:#EEF2FF,color:#312E81,stroke:#6366F1,stroke-width:1.5px;
+    classDef agent fill:#F5F3FF,color:#5B21B6,stroke:#8B5CF6;
+    classDef data fill:#ECFDF5,color:#065F46,stroke:#10B981;
+
+    class CANVAS,STREAM,WHITE,MEMUI,SKILLUI layer;
+    class SESSION,SCHED,EVENT,EVALAPI control;
+    class CORE,RELIABILITY,GOVERNANCE,OBS runtime;
+    class PLAN,WORK,REFLECT,REPORT,CTX,MEMORY,RECALL,SKILLS,EVOLVE agent;
+    class WEB,GRAPH,SQL,ART,VECTOR data;
+~~~
+
+## 信息源与研究工作流
+
+每个 Run 冻结一种信息源，禁止执行过程中跨源污染：
+
+- **graphrag**：私域文档、Chunk 向量检索、实体关系图和 Community 全局检索；
+- **web**：Tavily 联网搜索；
+- Memory 与历史对话仅用于理解问题，不可充当本轮研究证据。
+
+支持三种工作流：
+
+| 工作流 | 适用场景 |
+|---|---|
+| deep_research | 多轮搜索、推理和答案生成 |
+| fusion | 多检索策略融合 |
+| plan_execute_report | DAG 规划、多 Agent 执行、长报告生成与完成验证 |
+
+## 技术栈
+
+| 层 | 技术 |
+|---|---|
+| Agent / LLM | LangChain、LangGraph、OpenAI-compatible API |
+| Harness | Python、Pydantic、异步状态机、Durable Event、Checkpoint |
+| Retrieval | Tavily、Neo4j 5.22、APOC、GDS、Faiss、SentenceTransformers |
+| Backend | FastAPI、SSE、SQLAlchemy、SQLite、Alembic |
+| Frontend | React 18、TypeScript、Vite、TanStack Query、Motion |
+| Deployment | Docker Compose、Nginx、Uvicorn |
 
 ---
 
@@ -44,186 +298,160 @@
 
 - Python 3.10 或 3.11
 - Node.js 20 LTS
-- Docker（仅 `graphrag` 私有库模式需要，用于启动 Neo4j）
+- Docker Desktop
 
-### 2. 配置环境变量
+### 2. 配置
 
-```bash
+~~~bash
 cp .env.example .env
-```
+~~~
 
-按需修改 `.env`（密钥只保存在本机 `.env`，不提交仓库）：
+主要配置项：
 
 | 配置 | 说明 |
 |---|---|
-| `OPENAI_API_KEY` | **必填**，OpenAI 兼容 API 密钥 |
-| `OPENAI_BASE_URL` | 兼容服务地址，默认 `http://localhost:13000/v1` |
-| `OPENAI_LLM_MODEL` / `OPENAI_EMBEDDINGS_MODEL` | 生成模型 / 向量模型 |
-| `TAVILY_API_KEY` | **联网模式必填**（Tavily） |
-| `NEO4J_URI` / `NEO4J_USERNAME` / `NEO4J_PASSWORD` | **私有库模式必填**，Neo4j 连接 |
-| `APP_DATABASE_URL` | SQLite 路径，默认 `./data/app.db` |
-| `APP_PORT` / `FRONTEND_ORIGINS` | 服务端口与 CORS 白名单 |
-| `FRONTEND_PORT` | Docker 前端宿主端口，默认 `5173`；端口冲突时可改为 `5174` |
+| OPENAI_API_KEY | OpenAI 兼容 API 密钥 |
+| OPENAI_BASE_URL | 模型服务地址 |
+| OPENAI_LLM_MODEL | 生成模型 |
+| OPENAI_EMBEDDINGS_MODEL | 向量模型 |
+| TAVILY_API_KEY | Web 联网模式密钥 |
+| NEO4J_URI / NEO4J_USERNAME / NEO4J_PASSWORD | 私域 GraphRAG |
+| APP_DATABASE_URL | SQLite 数据库地址 |
+| RUN_MAX_LLM_TOKENS / RUN_WALL_TIME_SECONDS | Harness 预算 |
+| FRONTEND_PORT | 前端端口，默认 5173 |
 
-完整配置项及说明见 `.env.example` 注释（Harness 预算、检索参数、多智能体编排、缓存、图谱构建等均有覆盖）。
+完整选项见 [.env.example](.env.example)。
 
-### 3. 安装依赖
+### 3. Docker 一键启动
 
-```bash
+~~~powershell
+docker compose up -d --build
+~~~
+
+访问：
+
+- 前端：http://127.0.0.1:5173
+- API：http://127.0.0.1:8000
+- Neo4j Browser：http://127.0.0.1:7474
+
+若前端端口冲突：
+
+~~~powershell
+$env:FRONTEND_PORT = "5174"
+docker compose up -d --build
+~~~
+
+### 4. 本地开发
+
+~~~powershell
 python -m venv .venv
-.venv/Scripts/activate            # Windows；Linux/macOS 用 source .venv/bin/activate
+.venv\Scripts\activate
 pip install -r requirements.txt
 
+$env:PYTHONPATH = "$PWD\src"
+python -m alembic upgrade head
+python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --workers 1
+~~~
+
+另开终端启动前端：
+
+~~~powershell
 cd frontend
 npm install
-cd ..
-```
-
-### 4. 启动 Neo4j（私有库模式）
-
-```bash
-docker compose up -d neo4j
-```
-
-如需用 Docker 启动完整应用：
-
-```powershell
-docker compose up -d --build
-```
-
-若提示 `127.0.0.1:5173` 已被占用，可先停止此前由本地脚本启动的前端，或为本次 Compose 改用其他端口：
-
-```powershell
-# 方案一：停止 scripts/start-local.ps1 启动的本地进程
-.\scripts\stop-local.ps1
-docker compose up -d
-
-# 方案二：保留已有进程，让 Docker 前端使用 5174
-$env:FRONTEND_PORT = "5174"
-docker compose up -d
-# 浏览器访问 http://127.0.0.1:5174
-```
-
-### 5. 初始化数据库并启动后端
-
-```bash
-python -m alembic upgrade head   # src 定位已由 alembic.ini 的 prepend_sys_path 处理
-```
-
-后端采用 `src/` 布局（核心包位于 `src/deepresearch_agent/`），启动前需将 `src` 加入 `PYTHONPATH`：
-
-```powershell
-# Windows PowerShell
-$env:PYTHONPATH = "$PWD\src"
-python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --workers 1
-```
-
-```bash
-# Linux / macOS
-export PYTHONPATH="$PWD/src"
-python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --workers 1
-```
-
-### 6. 启动前端
-
-```bash
-cd frontend
 npm run dev
-```
+~~~
 
-浏览器访问 `http://127.0.0.1:5173`，创建会话 → 选择信息源（私有库 / 联网搜索）→ 发送消息，即可观察实时研究进度与最终报告。
+也可使用本地脚本：
 
-若运行结束显示 `BUDGET_EXHAUSTED: ... llm_tokens=...`，表示本轮 prompt + completion 确实达到 `RUN_MAX_LLM_TOKENS`。先重新构建后端，再按机器资源提高 `.env` 中的值，例如 `RUN_MAX_LLM_TOKENS=200000`；不要把已完成的 Run 直接标记为成功。
+~~~powershell
+.\scripts\start-local.ps1
+.\scripts\stop-local.ps1
+~~~
 
-### Windows 一键启动
+---
 
-```powershell
-.\scripts\start-local.ps1          # 含 Neo4j 启动、Alembic 迁移、前后端拉起
-.\scripts\stop-local.ps1           # 停止本地进程
-```
+## 测试与评测
 
-该脚本也会识别没有 PID 文件的本项目 Vite 进程；如果 5173 仍被其他程序占用，使用 `netstat -ano | findstr :5173` 检查其 PID。
+### 自动化回归
 
-### 运行测试
+~~~powershell
+python -m pytest -q
+cd frontend
+npm run build
+~~~
 
-```bash
-python -m pytest -q                # 后端离线门禁（当前 101 passed）
-cd frontend && npm run build       # 前端类型检查 + 生产构建
-```
+当前完整后端回归：**134 passed**；前端 TypeScript 类型检查与生产构建通过。
 
 ### 系统量化评测
 
-评测器从持久化 Run 轨迹计算 Verified/First-pass Completion、引用合法率、恢复与 Replan 成功率、Checkpoint 完整率、重复副作用率、P50/P95 时延和每个验证通过任务 Token；提供 Gold Evidence 时额外计算 Precision@K、Recall@K、MRR 与 nDCG@K。
-
-```powershell
+~~~powershell
 python scripts/evaluate_runs.py --output output/evaluation/summary.json
 python scripts/evaluate_runs.py --labels evals/system/cases.json --retrieval-k 10
-```
+~~~
 
-语义 Claim Support 与报告质量只接受人工或独立 Judge 标签，未标注时不会用确定性引用规则伪造分数。数据格式和完整指标说明见 `evals/system/README.md`。
+评测原则：
 
-### 常用 API
+- 确定性指标直接从持久化 Run 轨迹计算；
+- Claim Support 的规则结果只作为代理值；
+- 语义事实支持率与报告质量必须来自人工或独立 Judge 标签；
+- 建议固定模型、温度、预算和数据版本，并对非确定性案例重复运行。
+
+详细说明见 [系统评测文档](evals/system/README.md)。
+
+---
+
+## 常用 API
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/v1/health`、`/api/v1/capabilities` | 健康检查与能力声明 |
-| POST/GET | `/api/v1/sessions` | 创建 / 列出会话 |
-| GET/PATCH/DELETE | `/api/v1/sessions/{id}` | 会话详情 / 更新 / 删除 |
-| POST | `/api/v1/sessions/{id}/messages` | 发送消息（202，触发 Run） |
-| GET | `/api/v1/runs/{id}`、`.../events`、`.../evidence`、`.../report` | Run 状态 / SSE 事件流 / 证据 / 报告 |
-| POST | `/api/v1/runs/{id}/cancel`、`/resume`、`/clarifications` | 取消 / 恢复 / 澄清 |
-| GET/PATCH/DELETE | `/api/v1/memories` | 记忆检索 / 编辑 / 删除 |
-| GET/POST | `/api/v1/skills`、`.../evaluate`、`.../promote`、`.../rollback` | Skill 查看 / 评测 / 启用 / 回滚 |
-| GET | `/api/v1/evaluations/summary`、`.../runs/{run_id}` | 聚合指标 / 单 Run 指标 |
+| GET | /api/v1/health | 系统与依赖健康检查 |
+| POST/GET | /api/v1/sessions | 创建或查询会话 |
+| POST | /api/v1/sessions/{id}/messages | 发送消息并创建 Run |
+| GET | /api/v1/sessions/{id}/whiteboard | 全链路白板日志 |
+| GET | /api/v1/runs/{id} | Run 状态、阶段与预算 |
+| GET | /api/v1/runs/{id}/events | Durable SSE 事件流 |
+| GET | /api/v1/runs/{id}/evidence | Evidence Ledger |
+| GET | /api/v1/runs/{id}/report | 报告与 Contract 结果 |
+| POST | /api/v1/runs/{id}/cancel | 取消任务 |
+| POST | /api/v1/runs/{id}/resume | 恢复任务 |
+| GET/PATCH | /api/v1/memories | Curated Memory 管理 |
+| GET/POST | /api/v1/skills | Skill 查看、评测、启用与回滚 |
+| GET | /api/v1/evaluations/runs/{run_id} | 单 Run 评测 |
+| GET | /api/v1/evaluations/summary | 聚合评测指标 |
 
 ---
 
-## 文件结构
+## 项目结构
 
-```
+~~~text
 .
-├── backend/                      # FastAPI 后端
-│   ├── app/
-│   │   ├── main.py               # 应用入口与路由注册
-│   │   ├── api/v1/               # health / sessions / runs / learning 路由
-│   │   ├── services/             # run_service、chat_service、event_stream（SSE）
-│   │   └── schemas/              # API 与持久化 DTO
-│   └── Dockerfile
-├── frontend/                     # React + Vite + TS 前端
-│   └── src/
-│       ├── pages/ChatPage.tsx    # 聊天主界面（会话侧栏、消息流、报告、看板）
-│       ├── components/           # ReportView、SessionSidebar、StageCard、CanvasBoard 等
-│       └── hooks/                # useRunEvents（SSE）、useStagePositions
-├── src/                          # src 布局：核心引擎包（包名 deepresearch_agent，PYTHONPATH 需包含 src）
-│   └── deepresearch_agent/       # 核心引擎包
-│       ├── harness/              # Runtime、Workflow、bootstrap、recovery、checkpoints、event_bus、policies、evidence、verifiers
-│       ├── agents/               # DeepResearch / Fusion / multi_agent（planner、executor、reporter、integration）
-│       ├── search/               # 检索工具集：local/global/hybrid/naive、deep_research_tool、tool_registry
-│       ├── retrieval/            # base、tavily_provider、graphrag_provider、router（统一 Provider）
-│       ├── memory/               # episodic、semantic、session_summary、context_builder、service
-│       ├── evolution/            # SkillLoader、SkillRegistry、TrajectoryDistiller、Evaluator、Linter、Promotion
-│       ├── evaluation/           # Run/聚合指标、检索指标与 Gold 标签模型
-│       ├── persistence/          # SQLite、ArtifactStore、repositories、Alembic 迁移
-│       ├── graph/                # 知识图谱构建：extraction、indexing、processing、structure、community
-│       ├── pipelines/ingestion/  # 文档摄入（text_chunker、document_processor、file_reader）
-│       ├── integrations/build/   # 图谱索引构建（build_graph、build_chunk_index、增量更新）
-│       ├── models/               # LLM / Embedding 配置与封装
-│       ├── config/               # settings.py（全部环境变量）、prompts
-│       ├── community/            # 社区检测（leiden / sllpa）
-│       └── cache_manager/        # 模型与结果缓存
-├── tests/                        # 分阶段测试：acceptance / api / harness / memory / evolution / persistence / retrieval / models / smoke
-├── scripts/                      # start-local.ps1、stop-local.ps1、backup/restore、e2e-poll-check.ps1
-├── skills/                       # Skill 定义目录（SKILLS_ROOT）
-├── docs/acceptance/              # 验收矩阵与结果
-├── evals/                        # 基线、系统指标标签格式与技能评测
-├── data/                         # 运行产物：app.db、artifacts（git 忽略）
-├── cache/                        # 模型与检索缓存（git 忽略）
-├── files/                        # 私有知识库文档目录（FILES_DIR）
-├── alembic.ini                   # 数据库迁移配置
-├── docker-compose.yaml           # Neo4j 服务编排
-├── pytest.ini / requirements.txt / .env.example
-└── progress.md                   # 阶段化开发记录
-```
+├── backend/                         # FastAPI API 与 Run 调度
+├── frontend/                        # React 研究画板、白板、Memory、Skills
+├── src/deepresearch_agent/
+│   ├── harness/                     # Runtime、状态机、预算、恢复、Contract
+│   ├── agents/multi_agent/          # Planner、Worker、Reflection、Reporter
+│   ├── context/                     # 上下文块、预算与可信边界
+│   ├── memory/                      # Curated Memory、摘要与历史召回
+│   ├── evolution/                   # Skill 蒸馏、评测、Promote、回滚
+│   ├── evaluation/                  # Agent 与检索评测
+│   ├── persistence/                 # SQLite、Repository、Artifact、Migration
+│   ├── retrieval/                   # GraphRAG / Web Provider
+│   ├── graph/                       # 知识图谱构建与 Community
+│   └── search/                      # DeepResearch 检索工具
+├── tests/                           # Harness、API、Memory、Evolution、E2E
+├── evals/                           # Gold Evidence 与 Judge 标签
+├── docs/                            # 设计、上下文工程与评测报告
+├── skills/                          # 版本化 Skill 内容
+├── scripts/                         # 启停、评测和真实链路脚本
+├── data/                            # SQLite 与 Artifact 运行数据
+└── docker-compose.yaml
+~~~
 
----
+## 设计原则
 
+- **Verified Completion over plausible output**：通过验证才算完成；
+- **Evidence first**：研究结论必须能回溯到证据；
+- **Durable by default**：状态、事件和副作用默认持久化；
+- **Bounded context**：每个阶段都有明确上下文和预算边界；
+- **Controlled evolution**：经验可以演进，但必须经过评测和人工门禁；
+- **Honest failure**：证据、预算或权限不足时明确失败，不伪造成功。

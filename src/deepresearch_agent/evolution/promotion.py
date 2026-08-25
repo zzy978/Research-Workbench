@@ -17,13 +17,18 @@ class PromotionPolicy:
     def __init__(self, repository: SkillRepository, registry: SkillRegistry, audit: AuditRepository):
         self.repository, self.registry, self.audit = repository, registry, audit
 
-    async def promote(self, *, name: str, version: str, human_approved: bool):
+    async def promote(self, *, name: str, version: str, human_approved: bool, candidate_id: str | None = None):
         if not human_approved:
             raise PromotionRejected("必须由用户明确批准 Promote")
-        candidate = await self.repository.find_candidate(name, version)
+        candidate = (
+            await self.repository.get_candidate(candidate_id)
+            if candidate_id else await self.repository.find_candidate(name, version)
+        )
         target = await self.repository.get_version(name, version)
         if candidate is None or target is None:
             raise PromotionRejected("候选版本不存在")
+        if candidate.name != name or candidate.proposed_version != version:
+            raise PromotionRejected("候选与目标版本不匹配")
         evaluation = await self.repository.latest_eval(candidate.candidate_id)
         if evaluation is None or evaluation.status != "passed":
             raise PromotionRejected("候选尚未通过离线评测")

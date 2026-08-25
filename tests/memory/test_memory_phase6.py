@@ -93,6 +93,26 @@ async def test_memory_budget_and_sensitive_content_policy(database):
 
 
 @pytest.mark.asyncio
+async def test_full_ai_reply_is_rejected_and_legacy_reply_cannot_be_activated(database):
+    repository = MemoryRepository(database)
+    service = MemoryService(repository, AuditRepository(database), policy=MemoryPolicy())
+    session = await new_session(database)
+    full_reply = "# 研究报告\n\n" + "这是完整的 AI 报告正文。" * 80
+    with pytest.raises(MemoryRejected, match="Memory|报告"):
+        await service.create_candidate(
+            content=full_reply, target="project", kind="note",
+            provenance_refs=["run:legacy"], session_id=session.session_id,
+        )
+    legacy = await repository.create_candidate(
+        content=full_reply, scope="project", kind="note",
+        provenance_refs=["run:legacy"], confidence=0.8,
+        session_id=None, created_by="agent",
+    )
+    with pytest.raises(MemoryRejected, match="Memory|报告"):
+        await service.update(legacy.memory_id, status="active")
+
+
+@pytest.mark.asyncio
 async def test_episodic_fts_and_structured_summary_preserve_source_ids(database):
     session = await new_session(database)
     messages = MessageRepository(database)

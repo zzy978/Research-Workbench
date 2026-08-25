@@ -10,6 +10,7 @@ import { EvidenceDrawer } from "../components/EvidenceDrawer";
 import { FloatingComposer } from "../components/FloatingComposer";
 import { MessageStrip } from "../components/MessageStrip";
 import { SourceSelector } from "../components/SourceSelector";
+import { WhiteboardDrawer } from "../components/WhiteboardDrawer";
 import { arrivedStages, STAGES, StageMeta, StageState, stageCardId } from "../components/stageMeta";
 import { deriveStageFeed, StageFeed } from "../components/stageFeed";
 import { useStagePositions } from "../hooks/useStagePositions";
@@ -57,20 +58,29 @@ function ExecCard({ feed, run }: {feed: StageFeed; run: Run | null}) {
   const lastLive = hasLive ? feed.liveSearches.filter((search) => search.iteration_index === running).slice(-1)[0] : undefined;
 
   const rows = feed.iterations.map((entry) => ({ key: `${entry.index}-done`, label: `第 ${entry.index + 1} 轮`, sub: `${entry.queries.length} 次搜索 · ${entry.total_results} 条结果`, live: false }));
-  if (hasLive && running != null) rows.push({ key: `${running}-live`, label: `第 ${running + 1} 轮`, sub: lastLive ? `正在搜索 "{lastLive.query}"` : "正在思考检索方向…", live: true });
+  if (hasLive && running != null) rows.push({ key: `${running}-live`, label: `第 ${running + 1} 轮`, sub: lastLive ? `正在搜索 "${lastLive.query}"` : "正在思考检索方向…", live: true });
+
+  const isPlanWorkflow = run?.workflow_mode === "plan_execute_report";
+  const planRows = feed.tools.map((tool, index) => ({
+    key: `${tool.task_id ?? "tool"}-${index}`,
+    label: tool.failed ? `失败 · ${tool.tool_name}` : tool.tool_name,
+    sub: tool.query ?? (tool.result_count != null ? `${tool.result_count} 条结果` : tool.output_preview ?? "工具已返回"),
+    live: index === feed.tools.length - 1 && !TERMINAL.includes(run?.status ?? ""),
+    failed: Boolean(tool.failed),
+  }));
+  const displayRows = isPlanWorkflow ? planRows : rows;
 
   useEffect(() => {
     if (!listRef.current) return;
     const frame = requestAnimationFrame(() => listRef.current?.scrollTo({ top: listRef.current.scrollHeight }));
     return () => cancelAnimationFrame(frame);
-  }, [rows.length, lastLive?.query]);
+  }, [displayRows.length, lastLive?.query]);
 
   const usage = run?.usage?.usage;
   const limits = run?.usage?.limits;
   const toolPct = usage?.tool_calls && limits?.max_tool_calls ? Math.min(100, Math.round((usage.tool_calls / limits.max_tool_calls) * 100)) : 0;
   const cachePct = cacheHitRate(usage?.prefix_cache_hit_tokens, usage?.prefix_cache_miss_tokens);
 
-  const isPlanWorkflow = run?.workflow_mode === "plan_execute_report";
   const executionSummary = run?.status === "failed"
     ? ["NO_SOURCE_EVIDENCE", "INSUFFICIENT_SOURCE_EVIDENCE"].includes(run.error_code ?? "")
       ? "私域资料不足，研究已停止"
@@ -80,9 +90,9 @@ function ExecCard({ feed, run }: {feed: StageFeed; run: Run | null}) {
       : `正在执行计划任务 · ${feed.taskCount}/${feed.planTasks.length || feed.taskStartedCount || 1}`;
   return <div className="exec-card">
     <div className="iter-rows" ref={listRef}>
-      {rows.length === 0 && <div className="iter-row is-empty">{isPlanWorkflow ? executionSummary : "等待深度研究迭代开始…"}</div>}
-      {!isPlanWorkflow && rows.map((row) => (
-        <div key={row.key} className={`iter-row${row.live ? " is-live" : ""}`}>
+      {displayRows.length === 0 && <div className="iter-row is-empty">{isPlanWorkflow ? executionSummary : "等待深度研究迭代开始…"}</div>}
+      {displayRows.map((row) => (
+        <div key={row.key} className={`iter-row${row.live ? " is-live" : ""}${"failed" in row && row.failed ? " is-failed" : ""}`}>
           <span className="iter-row-label">{row.label}</span>
           <span className="iter-row-sub">{row.sub}</span>
           {row.live && <span className="pulse-dot" />}
@@ -121,6 +131,7 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
   const [runId, setRunId] = useState<string | null>(null);
   const [selectedEvidence, setSelectedEvidence] = useState<Evidence | null>(null);
   const [selectedStage, setSelectedStage] = useState<string | null>(null);
+  const [whiteboardOpen, setWhiteboardOpen] = useState(false);
   const [stripCollapsed, setStripCollapsed] = useState(() => localStorage.getItem("chat.stripCollapsed") === "1");
   const [composerCollapsed, setComposerCollapsed] = useState(() => localStorage.getItem("chat.composerCollapsed") === "1");
   const [error, setError] = useState<unknown>(null);
@@ -269,6 +280,7 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
           </span>
         )}
         <span className={`connection-dot${connection === "reconnecting" ? " reconnecting" : ""}`}>{run && TERMINAL.includes(run.status) ? "已结束" : connection === "reconnecting" ? "重连中" : connection === "connected" ? "实时" : "待连接"}</span>
+        <button type="button" className="whiteboard-button" onClick={() => setWhiteboardOpen(true)}>白板</button>
         <button type="button" className="icon-btn" onClick={() => setStripCollapsed((value) => !value)} title={stripCollapsed ? "展开会话消息" : "折叠会话消息"} aria-label="会话消息">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
@@ -316,5 +328,6 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
     {run?.status === "needs_user_input" && <ClarificationCard onSubmit={async (content) => { await api.clarify(run.run_id, content); await refresh(); }} />}
     <EvidenceDrawer item={selectedEvidence} onClose={() => setSelectedEvidence(null)} />
     <AnimatePresence>{selectedStage && run && <CardDetailDrawer stageId={selectedStage} run={run} feed={feed} report={report.data} evidence={evidence.data?.items ?? []} context={contextInspector.data} onEvidence={openEvidence} onClose={() => setSelectedStage(null)} />}</AnimatePresence>
+    <WhiteboardDrawer sessionId={sessionId} open={whiteboardOpen} live={Boolean(run && !TERMINAL.includes(run.status))} onClose={() => setWhiteboardOpen(false)} />
   </main>;
 }

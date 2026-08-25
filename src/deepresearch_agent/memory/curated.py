@@ -162,6 +162,9 @@ class CuratedMemoryService:
             values["expires_at"] = expires_at
         next_status = str(values.get("status", item.status))
         if next_status == "active" and (item.status != "active" or content is not None):
+            verdict = self.policy.validate(next_content)
+            if not verdict.allowed:
+                raise MemoryRejected(verdict.reason or "Memory policy rejected")
             excluding_id = memory_id if item.status == "active" else (item.supersedes or memory_id)
             await self._assert_capacity(target, next_content, excluding_id=excluding_id)
         if values:

@@ -1,5 +1,8 @@
 .venv/
+.idea/
 .obsidian/
+docs/*
+!docs/CONTEXT_REDUNDANCY_EVALUATION_REPORT.md
 __pycache__/
 *.pyc
 .env

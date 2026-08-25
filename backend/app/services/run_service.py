@@ -135,7 +135,7 @@ class RunService:
                 max_parallel_workers=context.budget_limits.max_concurrency,
             )
             bundle = MultiAgentFactory.create_default_bundle(retrieval_provider=provider, worker=worker)
-            return PlanExecuteReportDriver(context, bundle.orchestrator)
+            return PlanExecuteReportDriver(context, bundle.orchestrator, events=events)
 
         runtime = HarnessRuntime(
             run_repository=self.runs, message_repository=self.messages,

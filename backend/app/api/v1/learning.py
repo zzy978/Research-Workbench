@@ -121,6 +121,56 @@ async def promote_skill(name: str, version: str, services=Depends(get_skill_serv
     return {"accepted": True, "name": name, "version": item.version, "status": item.status}
 
 
+@router.get("/skills/candidates/{candidate_id}")
+async def get_skill_candidate(candidate_id: str, services=Depends(get_skill_services)):
+    candidate = await services["repository"].get_candidate(candidate_id)
+    if candidate is None:
+        raise AppError(ErrorCode.NOT_FOUND, "Skill candidate 不存在")
+    evaluation = await services["repository"].latest_eval(candidate.candidate_id)
+    return {
+        "candidate_id": candidate.candidate_id, "run_id": candidate.run_id,
+        "name": candidate.name, "version": candidate.proposed_version,
+        "status": candidate.status, "payload": json.loads(candidate.payload_json or "{}"),
+        "evaluation": None if evaluation is None else {
+            "eval_run_id": evaluation.eval_run_id, "status": evaluation.status,
+            "metrics": json.loads(evaluation.metrics_json or "{}"),
+        },
+        "created_at": candidate.created_at,
+    }
+
+
+@router.post("/skills/candidates/{candidate_id}/evaluate")
+async def evaluate_skill_candidate(candidate_id: str, services=Depends(get_skill_services), database=Depends(get_database)):
+    candidate = await services["repository"].get_candidate(candidate_id)
+    if candidate is None:
+        raise AppError(ErrorCode.NOT_FOUND, "Skill candidate 不存在")
+    result = await services["evaluator"].evaluate(candidate.candidate_id)
+    await AuditRepository(database).append(
+        action="skill.evaluated", entity_type="skill",
+        entity_id=f"{candidate.name}:{candidate.proposed_version}",
+        payload={"candidate_id": candidate_id, "eval_run_id": result.eval_run_id, "status": result.status},
+    )
+    return {
+        "eval_run_id": result.eval_run_id, "candidate_id": candidate.candidate_id,
+        "status": result.status, "metrics": json.loads(result.metrics_json or "{}"),
+    }
+
+
+@router.post("/skills/candidates/{candidate_id}/promote")
+async def promote_skill_candidate(candidate_id: str, services=Depends(get_skill_services)):
+    candidate = await services["repository"].get_candidate(candidate_id)
+    if candidate is None:
+        raise AppError(ErrorCode.NOT_FOUND, "Skill candidate 不存在")
+    try:
+        item = await services["promotion"].promote(
+            name=candidate.name, version=candidate.proposed_version,
+            human_approved=True, candidate_id=candidate.candidate_id,
+        )
+    except PromotionRejected as exc:
+        raise AppError(ErrorCode.CONFLICT, str(exc)) from exc
+    return {"accepted": True, "candidate_id": candidate_id, "name": item.name, "version": item.version, "status": item.status}
+
+
 @router.post("/skills/{name}/rollback")
 async def rollback_skill(name: str, services=Depends(get_skill_services)):
     try:

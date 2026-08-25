@@ -1,4 +1,4 @@
-import { ApiError, CacheStats, Capabilities, ContextInspector, CuratedMemory, Evidence, MemoryCapacity, Report, Run, Session, SessionDetail, SourceMode, WorkflowMode } from "../types/api";
+import { ApiError, CacheStats, Capabilities, ContextInspector, CuratedMemory, Evidence, MemoryCapacity, Report, Run, Session, SessionDetail, SourceMode, WhiteboardLog, WorkflowMode } from "../types/api";
 
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api/v1").replace(/\/$/, "");
 
@@ -18,6 +18,7 @@ export const api = {
   cacheStats: () => request<CacheStats>("/cache/stats"),
   sessions: () => request<{items: Session[]; total: number}>("/sessions?include_archived=true"),
   session: (id: string) => request<SessionDetail>(`/sessions/${id}`),
+  whiteboard: (id: string) => request<WhiteboardLog>(`/sessions/${id}/whiteboard`),
   createSession: (title = "新对话") => request<Session>("/sessions", { method: "POST", body: JSON.stringify({ title }) }),
   patchSession: (id: string, payload: {title?: string; status?: string}) => request<Session>(`/sessions/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteSession: (id: string) => request<void>(`/sessions/${id}`, { method: "DELETE" }),
@@ -35,6 +36,10 @@ export const api = {
   patchMemory: (id: string, payload: Record<string, unknown>) => request<CuratedMemory>(`/memories/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteMemory: (id: string) => request<void>(`/memories/${id}`, { method: "DELETE" }),
   skills: () => request<{versions: Array<Record<string, unknown>>; candidates: Array<Record<string, unknown>>}>("/skills"),
+  skill: (name: string, version: string) => request<Record<string, unknown>>(`/skills/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}`),
+  skillCandidate: (id: string) => request<Record<string, unknown>>(`/skills/candidates/${encodeURIComponent(id)}`),
+  evaluateSkillCandidate: (id: string) => request<Record<string, unknown>>(`/skills/candidates/${encodeURIComponent(id)}/evaluate`, {method: "POST"}),
+  promoteSkillCandidate: (id: string) => request<Record<string, unknown>>(`/skills/candidates/${encodeURIComponent(id)}/promote`, {method: "POST"}),
   evaluateSkill: (name: string, version: string) => request<Record<string, unknown>>(`/skills/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}/evaluate`, {method: "POST"}),
   promoteSkill: (name: string, version: string) => request<Record<string, unknown>>(`/skills/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}/promote`, {method: "POST"}),
   rollbackSkill: (name: string) => request<Record<string, unknown>>(`/skills/${encodeURIComponent(name)}/rollback`, {method: "POST"}),

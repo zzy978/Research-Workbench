@@ -84,6 +84,7 @@ class WorkerCoordinator:
         signal: PlanExecutionSignal,
         *,
         stop_predicate: Optional[Callable[[], bool]] = None,
+        progress_callback: Optional[Callable[[str, TaskNode, Optional[ExecutionRecord]], None]] = None,
     ) -> List[ExecutionRecord]:
         """根据计划信号执行所有任务，返回执行记录列表。"""
         task_map = self._prepare_tasks(signal)
@@ -93,10 +94,13 @@ class WorkerCoordinator:
 
         effective_mode = self._resolve_execution_mode(signal.execution_mode)
         if effective_mode == "parallel":
-            results = self._execute_parallel(state, signal, task_map)
+            results = self._execute_parallel(
+                state, signal, task_map, progress_callback=progress_callback,
+            )
         else:
             results = self._execute_sequential(
                 state, signal, task_map, stop_predicate=stop_predicate,
+                progress_callback=progress_callback,
             )
 
         if state.plan is not None:
@@ -147,6 +151,7 @@ class WorkerCoordinator:
         task_map: Dict[str, TaskNode],
         *,
         stop_predicate: Optional[Callable[[], bool]] = None,
+        progress_callback: Optional[Callable[[str, TaskNode, Optional[ExecutionRecord]], None]] = None,
     ) -> List[ExecutionRecord]:
         results: List[ExecutionRecord] = []
         sequence = signal.execution_sequence or list(task_map.keys())
@@ -161,6 +166,9 @@ class WorkerCoordinator:
             if task is None:
                 _LOGGER.warning("计划信号中包含未知任务: %s", task_id)
                 continue
+            if progress_callback is not None:
+                progress_callback("task.started", task, None)
+            start_index = len(results)
             self._execute_single_task(
                 state=state,
                 signal=signal,
@@ -169,6 +177,9 @@ class WorkerCoordinator:
                 results=results,
                 skip_dependency_check=False,
             )
+            if progress_callback is not None:
+                for record in results[start_index:]:
+                    progress_callback("task.completed", task, record)
         return results
 
     def _execute_parallel(
@@ -176,6 +187,8 @@ class WorkerCoordinator:
         state: PlanExecuteState,
         signal: PlanExecutionSignal,
         task_map: Dict[str, TaskNode],
+        *,
+        progress_callback: Optional[Callable[[str, TaskNode, Optional[ExecutionRecord]], None]] = None,
     ) -> List[ExecutionRecord]:
         results: List[ExecutionRecord] = []
         sequence = signal.execution_sequence or list(task_map.keys())
@@ -208,6 +221,8 @@ class WorkerCoordinator:
                     task = task_map[task_id]
                     dependency_ok, dependency_error, failure_reason = self._check_dependencies(task, state)
                     if dependency_ok:
+                        if progress_callback is not None:
+                            progress_callback("task.started", task, None)
                         future = executor.submit(
                             self._execute_isolated_task,
                             shared_state=state,
@@ -234,6 +249,8 @@ class WorkerCoordinator:
                             failure_reason=failure_reason,
                         )
                         results.append(failure_record)
+                        if progress_callback is not None:
+                            progress_callback("task.completed", task, failure_record)
                         task_status[task_id] = "failed"
                         pending.remove(task_id)
                         scheduled_this_round = True
@@ -257,6 +274,8 @@ class WorkerCoordinator:
                                 failure_reason="execution_exception",
                             )
                             results.append(failure_record)
+                            if progress_callback is not None:
+                                progress_callback("task.completed", task, failure_record)
                             success = False
                             task_status[task_id] = "failed"
                         scheduled_this_round = True
@@ -274,6 +293,9 @@ class WorkerCoordinator:
                         )
                         results.extend(isolated_records)
                         task_status[task_id] = "completed" if success else "failed"
+                        if progress_callback is not None:
+                            for record in isolated_records:
+                                progress_callback("task.completed", task_map[task_id], record)
                     continue
 
                 if not scheduled_this_round:
@@ -287,6 +309,8 @@ class WorkerCoordinator:
                                 failure_reason="dependency_unresolved",
                             )
                             results.append(failure_record)
+                            if progress_callback is not None:
+                                progress_callback("task.completed", task, failure_record)
                             task_status[task_id] = "failed"
                         pending.clear()
                     break

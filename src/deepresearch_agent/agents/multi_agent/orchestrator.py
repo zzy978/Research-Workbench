@@ -236,6 +236,7 @@ class MultiAgentOrchestrator:
         planner_result: PlannerResult,
         *,
         stop_predicate=None,
+        progress_callback=None,
     ) -> List[ExecutionRecord]:
         """Run only the existing WorkerCoordinator stage."""
         signal = planner_result.executor_signal
@@ -243,6 +244,7 @@ class MultiAgentOrchestrator:
             raise ValueError("Planner未提供执行信号，无法继续执行")
         return self._worker.execute_plan(
             state, signal, stop_predicate=stop_predicate,
+            progress_callback=progress_callback,
         )
 
     def report(

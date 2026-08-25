@@ -33,10 +33,19 @@ def test_parallel_workers_merge_local_state_once_in_plan_order():
     state = PlanExecuteState(input="parallel", plan=plan)
     coordinator = WorkerCoordinator(executors=[IsolatedExecutor(threading.Barrier(4))], execution_mode="parallel", max_parallel_workers=4)
 
-    records = coordinator.execute_plan(state, plan.to_execution_signal())
+    progress = []
+    lock = threading.Lock()
+
+    def on_progress(kind, task, record):
+        with lock:
+            progress.append((kind, task.task_id, None if record is None else record.record_id))
+
+    records = coordinator.execute_plan(state, plan.to_execution_signal(), progress_callback=on_progress)
 
     assert [record.task_id for record in records] == [f"task_{index}" for index in range(4)]
     assert [record.task_id for record in state.execution_records] == [f"task_{index}" for index in range(4)]
     assert state.execution_context.completed_task_ids == [f"task_{index}" for index in range(4)]
     assert len({record.record_id for record in state.execution_records}) == 4
     assert all(node.status == "completed" for node in state.plan.task_graph.nodes)
+    assert {task_id for kind, task_id, _ in progress if kind == "task.started"} == {f"task_{index}" for index in range(4)}
+    assert {task_id for kind, task_id, record_id in progress if kind == "task.completed" and record_id} == {f"task_{index}" for index in range(4)}

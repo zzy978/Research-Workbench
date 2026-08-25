@@ -11,7 +11,7 @@ export interface IterationEntry {
   answer_char_count?: number;
 }
 /** 工具调用条目（tool.completed 增强 payload） */
-export interface ToolEntry { tool_name: string; query?: string; result_count?: number; task_id?: string }
+export interface ToolEntry { tool_name: string; query?: string; result_count?: number; task_id?: string; failed?: boolean; output_preview?: string }
 /** 计划任务（plan.created/revised 增强 payload） */
 export interface PlanTask { task_id: string; task_type: string; description: string }
 export interface RecoveryInfo {
@@ -96,7 +96,7 @@ function parseTools(events: RunEvent[]): ToolEntry[] {
   const seen = new Set<string>();
   return events
     .filter((event) => {
-      if (event.event_type !== "tool.completed") return false;
+      if (event.event_type !== "tool.completed" && event.event_type !== "tool.failed") return false;
       const key = stringOr(event.tool_call_id, `${event.task_id}:${event.tool_name}:${event.query}`);
       if (seen.has(key)) return false;
       seen.add(key);
@@ -107,6 +107,8 @@ function parseTools(events: RunEvent[]): ToolEntry[] {
       query: typeof event.query === "string" ? event.query : undefined,
       result_count: typeof event.result_count === "number" ? event.result_count : undefined,
       task_id: typeof event.task_id === "string" ? event.task_id : undefined,
+      failed: event.event_type === "tool.failed",
+      output_preview: typeof event.output_preview === "string" ? event.output_preview : undefined,
     }));
 }
 

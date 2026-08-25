@@ -59,7 +59,7 @@ async def run_persistent_query(
                 agents.append(agent)
                 return DeepResearchDriver(context, agent, events=events)
             bundle = MultiAgentFactory.create_default_bundle(retrieval_provider=provider)
-            return PlanExecuteReportDriver(context, bundle.orchestrator)
+            return PlanExecuteReportDriver(context, bundle.orchestrator, events=events)
 
         runtime = HarnessRuntime(
             run_repository=RunRepository(database), message_repository=MessageRepository(database),

@@ -139,7 +139,8 @@ def test_detailed_request_raises_report_depth_and_evidence_requirement(client):
 
 
 def test_run_report_evidence_and_durable_sse_replay(client):
-    run_id = send(client, new_session(client)).json()["run_id"]
+    session_id = new_session(client)
+    run_id = send(client, session_id).json()["run_id"]
     terminal = wait_terminal(client, run_id)
     assert terminal["status"] == "completed", (terminal["error_code"], terminal["error_message"])
     evidence = client.get(f"/api/v1/runs/{run_id}/evidence").json()
@@ -160,6 +161,15 @@ def test_run_report_evidence_and_durable_sse_replay(client):
         body = "".join(response.iter_text())
     assert "event: run.completed" in body
     assert "id: 1\n" not in body
+    whiteboard = client.get(f"/api/v1/sessions/{session_id}/whiteboard")
+    assert whiteboard.status_code == 200
+    payload = whiteboard.json()
+    assert payload["counts"]["messages"] == 2
+    assert payload["counts"]["tools"] == 1
+    assert {item["label"] for item in payload["entries"] if item["kind"] == "message"} == {"用户消息", "AI 回复"}
+    tool = next(item for item in payload["entries"] if item["kind"] == "tool")
+    assert tool["payload"]["args"] == {"query": "safe"}
+    assert tool["payload"]["result"] == {"ok": True}
 
 
 def test_context_inspector_verifies_preserved_report_sections(client):
@@ -317,3 +327,29 @@ def test_skill_api_evaluate_promote_and_rollback(client):
         assert promoted.status_code == 200 and promoted.json()["status"] == "active"
     rolled_back = client.post("/api/v1/skills/api-research-skill/rollback")
     assert rolled_back.status_code == 200 and rolled_back.json()["version"] == "0.1.0"
+
+
+def test_skill_candidate_detail_and_id_scoped_actions(client):
+    run_id = send(client, new_session(client)).json()["run_id"]
+    assert wait_terminal(client, run_id)["status"] == "completed"
+
+    async def register():
+        return await client.app.state.run_service.skill_registry.register_candidate(
+            run_id=run_id,
+            spec=SkillSpec(
+                name="candidate-detail-skill", description="可查看完整内容并按候选 ID 操作。", version="0.1.0",
+                source_modes=["graphrag"], created_from_runs=[run_id], triggers=["候选详情"], inputs=["问题"],
+                steps=["规划", "执行", "验证"], allowed_tools=["local_search"],
+                fallback="证据不足则停止。", verification=["citation_integrity"],
+            ),
+            eval_cases=[{"name": "positive"}, {"name": "boundary"}],
+        )
+
+    candidate = client.portal.call(register)
+    detail = client.get(f"/api/v1/skills/candidates/{candidate.candidate_id}")
+    assert detail.status_code == 200
+    assert "## 步骤" in detail.json()["payload"]["content"]
+    evaluated = client.post(f"/api/v1/skills/candidates/{candidate.candidate_id}/evaluate")
+    assert evaluated.status_code == 200 and evaluated.json()["candidate_id"] == candidate.candidate_id
+    promoted = client.post(f"/api/v1/skills/candidates/{candidate.candidate_id}/promote")
+    assert promoted.status_code == 200 and promoted.json()["status"] == "active"
