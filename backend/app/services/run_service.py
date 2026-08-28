@@ -21,17 +21,18 @@ from deepresearch_agent.persistence.repositories import (
     ArtifactRepository, CheckpointRepository, ContractRepository, EventRepository,
     EvidenceRepository, MessageRepository, PlanTaskToolRepository, RunRepository,
     SessionRepository, MemoryRepository, AuditRepository,
-    SkillRepository,
+    LearningReviewRepository, SkillRepository,
 )
 from deepresearch_agent.context import ArtifactEditContextBuilder, ContextBuilder, ContextCompactor
 from deepresearch_agent.memory import MemoryExtractor, MemoryService
 from deepresearch_agent.sessions import SessionSearchService
 from deepresearch_agent.config import settings
-from deepresearch_agent.evolution import SkillLoader, SkillRegistry, TrajectoryDistiller
+from deepresearch_agent.evolution import PromotionPolicy, SkillLearningService, SkillLoader, SkillRegistry
 from deepresearch_agent.models.prefix_cache import clear_run_cancelled, mark_run_cancelled, tracker as prefix_tracker
 from deepresearch_agent.models.get_models import get_llm_model
 from deepresearch_agent.retrieval.router import create_default_router
 from deepresearch_agent.retrieval.base import TimeoutBoundProvider
+from backend.app.schemas import MessageCreate, RunCreate, SessionCreate
 
 
 class RunService:
@@ -61,8 +62,10 @@ class RunService:
             project_max_chars=settings.MEMORY_PROJECT_MAX_CHARS,
         )
         session_repository = SessionRepository(database)
+        self.sessions = session_repository
         artifact_repository = ArtifactRepository(database)
-        self.skill_registry = SkillRegistry(skills_root, SkillRepository(database))
+        skill_repository = SkillRepository(database)
+        self.skill_registry = SkillRegistry(skills_root, skill_repository)
         skill_loader = SkillLoader(self.skill_registry)
         self.context_builder = ContextBuilder(
             messages=self.messages, sessions=session_repository, memory_service=memory_service,
@@ -104,7 +107,24 @@ class RunService:
             max_candidates=settings.MEMORY_LLM_MAX_CANDIDATES,
             max_message_chars=settings.MEMORY_LLM_MAX_MESSAGE_CHARS,
         )
-        self.skill_distiller = TrajectoryDistiller(database, self.skill_registry, self.runs, self.messages, ContractRepository(database))
+        learning_llms = []
+        if settings.LEARNING_REVIEW_ENABLED and workflow_factory is None and settings.OPENAI_API_KEY and settings.LEARNING_REVIEW_MODEL:
+            learning_llms = [
+                get_llm_model(model=settings.LEARNING_REVIEW_MODEL, temperature=0.0, max_tokens=settings.LEARNING_REVIEW_MAX_OUTPUT_TOKENS),
+                get_llm_model(model=settings.LEARNING_REVIEW_MODEL, temperature=0.0, max_tokens=settings.LEARNING_REVIEW_MAX_OUTPUT_TOKENS),
+            ]
+        self.skill_learning = SkillLearningService(
+            database, LearningReviewRepository(database), skill_repository, self.skill_registry,
+            proposer_llm=learning_llms[0] if learning_llms else None,
+            critic_llm=learning_llms[1] if learning_llms else None,
+            events=self.event_bus, enabled=settings.LEARNING_REVIEW_ENABLED,
+            max_retries=settings.LEARNING_REVIEW_MAX_RETRIES,
+        )
+        self.skill_promotion = PromotionPolicy(
+            skill_repository, self.skill_registry, AuditRepository(database),
+            require_real_replay=True, staged=True,
+            canary_percent=settings.SKILL_CANARY_INITIAL_PERCENT,
+        )
 
     def schedule(self, run_id: str) -> asyncio.Task:
         existing = self._tasks.get(run_id)
@@ -144,7 +164,7 @@ class RunService:
             trajectory_repository=PlanTaskToolRepository(self.database), workflow_factory=workflow_factory,
             artifact_store=self.artifact_store, artifact_repository=ArtifactRepository(self.database),
             event_bus=self.event_bus,
-            context_builder=self.context_builder, memory_extractor=self.memory_extractor, skill_distiller=self.skill_distiller,
+            context_builder=self.context_builder, memory_extractor=self.memory_extractor, skill_distiller=None,
             prefix_tracker=prefix_tracker,
         )
         try:
@@ -153,11 +173,62 @@ class RunService:
             for agent in agents:
                 if hasattr(agent, "close"):
                     agent.close()
+            run = await self.runs.get(run_id)
+            config = json.loads(run.config_snapshot_json or "{}") if run else {}
+            if not config.get("evaluation_run"):
+                await self.skill_learning.enqueue_for_run(run_id)
+                snapshot = json.loads(run.model_snapshot_json or "{}") if run else {}
+                selected = snapshot.get("skill") if isinstance(snapshot, dict) else None
+                if isinstance(selected, dict) and selected.get("status") == "canary":
+                    checks = await ContractRepository(self.database).list_for_run(run_id)
+                    safety_violation = any(item.kind == "source_match" and item.passed != 1 for item in checks)
+                    await self.skill_promotion.observe_run(
+                        name=str(selected.get("name")), version=str(selected.get("version")),
+                        succeeded=bool(run and run.status == "completed"), safety_violation=safety_violation,
+                    )
+
+    async def run_evaluation_case(self, *, query: str, source_mode: str, workflow_mode: str, forced_skill=None) -> dict[str, Any]:
+        """Execute one isolated real Harness Run for paired Skill evaluation."""
+        session = await self.sessions.create(SessionCreate(title="[Skill Eval]"))
+        message, run, _ = await self.runs.create_for_user_message(
+            MessageCreate(session_id=session.session_id, role="user", content=query, client_message_id=None, metadata={"evaluation": True}),
+            RunCreate(
+                session_id=session.session_id, trigger_message_id="assigned-atomically",
+                source_mode=SourceMode(source_mode), workflow_mode=WorkflowMode(workflow_mode),
+                config_snapshot={
+                    "evaluation_run": True, "disable_skills": forced_skill is None,
+                    "forced_skill": forced_skill, "min_evidence": 1,
+                    "report_type": "brief", "deep_research_max_iterations": 1,
+                    "schema_version": 1,
+                },
+                budget=settings.HARNESS_BUDGETS,
+            ),
+        )
+        await self._execute(run.run_id)
+        finished = await self.runs.get(run.run_id)
+        checks = await ContractRepository(self.database).list_for_run(run.run_id)
+        usage = json.loads(finished.usage_json or "{}") if finished else {}
+        check_map = {item.kind: bool(item.passed) for item in checks}
+        limits = usage.get("limits", {}) if isinstance(usage, dict) else {}
+        used = usage.get("usage", usage) if isinstance(usage, dict) else {}
+        return {
+            "run_id": run.run_id, "completed": bool(finished and finished.status == "completed"),
+            "status": finished.status if finished else "missing",
+            "citation_integrity": float(check_map.get("citation_integrity", False)),
+            "claim_support": float(check_map.get("claim_support", False)),
+            "tool_policy_violations": 0,
+            "source_leakage": 0 if check_map.get("source_match", False) else 1,
+            "safety_passed": bool(check_map.get("source_match", False)),
+            "llm_tokens": int(used.get("llm_tokens", 0) or 0),
+            "wall_time_seconds": float(used.get("elapsed_seconds", 0) or 0),
+            "checks": check_map,
+        }
 
     async def startup_recovery(self, *, auto_resume: bool = AUTO_RESUME_RUNS) -> list[str]:
         run_ids = await RecoveryManager(self.runs).scan(auto_resume=auto_resume)
         for run_id in run_ids:
             self.schedule(run_id)
+        await self.skill_learning.recover()
         return run_ids
 
     async def cancel(self, run_id: str) -> bool:
@@ -189,6 +260,7 @@ class RunService:
         return resumed
 
     async def shutdown(self) -> None:
+        await self.skill_learning.shutdown()
         active = list(self._tasks.values())
         if not active:
             return

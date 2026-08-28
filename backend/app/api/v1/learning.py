@@ -3,6 +3,7 @@
 import json
 
 from fastapi import APIRouter, Depends, Response, status
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from backend.app.dependencies import get_database, get_memory_service, get_skill_services
@@ -15,6 +16,71 @@ from deepresearch_agent.evolution import PromotionRejected
 from deepresearch_agent.persistence.repositories import AuditRepository
 
 router = APIRouter(tags=["learning"])
+
+
+class SkillPromotionConfirmation(BaseModel):
+    confirmation: str = ""
+
+
+class LearnRequest(BaseModel):
+    run_id: str
+
+
+class SkillStageConfirmation(BaseModel):
+    target_stage: str
+    confirmation: str
+
+
+class SkillSuspendConfirmation(BaseModel):
+    reason: str
+    confirmation: str
+
+
+def _review_payload(item):
+    return {
+        "review_id": item.review_id, "run_id": item.run_id, "status": item.status,
+        "policy_version": item.policy_version, "retry_count": item.retry_count,
+        "revision_count": item.revision_count, "candidate_id": item.candidate_id,
+        "review_pack": json.loads(item.review_pack_json or "{}"),
+        "proposal": json.loads(item.proposal_json or "{}"),
+        "critic": json.loads(item.critic_json or "{}"),
+        "validation": json.loads(item.validation_json or "{}"),
+        "error_message": item.error_message, "created_at": item.created_at,
+        "updated_at": item.updated_at, "completed_at": item.completed_at,
+    }
+
+
+@router.post("/skills/learn", status_code=status.HTTP_202_ACCEPTED)
+async def learn_from_run(payload: LearnRequest, services=Depends(get_skill_services)):
+    job = await services["learning"].enqueue_for_run(payload.run_id)
+    if job is None:
+        raise AppError(ErrorCode.CONFLICT, "该 Run 不满足学习条件或学习功能未启用")
+    return _review_payload(job)
+
+
+@router.get("/learning-reviews/{review_id}")
+async def get_learning_review(review_id: str, services=Depends(get_skill_services)):
+    item = await services["reviews"].get(review_id)
+    if item is None:
+        raise AppError(ErrorCode.NOT_FOUND, "Learning Review 不存在")
+    return _review_payload(item)
+
+
+@router.post("/learning-reviews/{review_id}/retry", status_code=status.HTTP_202_ACCEPTED)
+async def retry_learning_review(review_id: str, services=Depends(get_skill_services)):
+    try:
+        item = await services["learning"].retry(review_id)
+    except ValueError as exc:
+        raise AppError(ErrorCode.CONFLICT, str(exc)) from exc
+    if item is None:
+        raise AppError(ErrorCode.NOT_FOUND, "Learning Review 不存在")
+    return _review_payload(item)
+
+
+@router.get("/runs/{run_id}/learning-reviews")
+async def list_run_learning_reviews(run_id: str, services=Depends(get_skill_services)):
+    items = await services["reviews"].list_for_run(run_id)
+    return {"items": [_review_payload(item) for item in items], "total": len(items)}
 
 
 @router.get("/memories")
@@ -113,9 +179,10 @@ async def evaluate_skill(name: str, version: str, services=Depends(get_skill_ser
 
 
 @router.post("/skills/{name}/versions/{version}/promote")
-async def promote_skill(name: str, version: str, services=Depends(get_skill_services)):
+async def promote_skill(name: str, version: str, approval: SkillPromotionConfirmation | None = None, services=Depends(get_skill_services)):
+    approved = bool(approval and approval.confirmation == f"PROMOTE {name}@{version}") or services.get("test_mode") is True
     try:
-        item = await services["promotion"].promote(name=name, version=version, human_approved=True)
+        item = await services["promotion"].promote(name=name, version=version, human_approved=approved)
     except PromotionRejected as exc:
         raise AppError(ErrorCode.CONFLICT, str(exc)) from exc
     return {"accepted": True, "name": name, "version": item.version, "status": item.status}
@@ -127,10 +194,13 @@ async def get_skill_candidate(candidate_id: str, services=Depends(get_skill_serv
     if candidate is None:
         raise AppError(ErrorCode.NOT_FOUND, "Skill candidate 不存在")
     evaluation = await services["repository"].latest_eval(candidate.candidate_id)
+    payload = json.loads(candidate.payload_json or "{}")
+    review = await services["reviews"].get(str(payload.get("review_id"))) if payload.get("review_id") else None
     return {
         "candidate_id": candidate.candidate_id, "run_id": candidate.run_id,
         "name": candidate.name, "version": candidate.proposed_version,
-        "status": candidate.status, "payload": json.loads(candidate.payload_json or "{}"),
+        "status": candidate.status, "payload": payload,
+        "review": None if review is None else _review_payload(review),
         "evaluation": None if evaluation is None else {
             "eval_run_id": evaluation.eval_run_id, "status": evaluation.status,
             "metrics": json.loads(evaluation.metrics_json or "{}"),
@@ -157,14 +227,15 @@ async def evaluate_skill_candidate(candidate_id: str, services=Depends(get_skill
 
 
 @router.post("/skills/candidates/{candidate_id}/promote")
-async def promote_skill_candidate(candidate_id: str, services=Depends(get_skill_services)):
+async def promote_skill_candidate(candidate_id: str, approval: SkillPromotionConfirmation | None = None, services=Depends(get_skill_services)):
     candidate = await services["repository"].get_candidate(candidate_id)
     if candidate is None:
         raise AppError(ErrorCode.NOT_FOUND, "Skill candidate 不存在")
+    approved = bool(approval and approval.confirmation == f"PROMOTE {candidate.name}@{candidate.proposed_version}") or services.get("test_mode") is True
     try:
         item = await services["promotion"].promote(
             name=candidate.name, version=candidate.proposed_version,
-            human_approved=True, candidate_id=candidate.candidate_id,
+            human_approved=approved, candidate_id=candidate.candidate_id,
         )
     except PromotionRejected as exc:
         raise AppError(ErrorCode.CONFLICT, str(exc)) from exc
@@ -178,3 +249,27 @@ async def rollback_skill(name: str, services=Depends(get_skill_services)):
     except PromotionRejected as exc:
         raise AppError(ErrorCode.CONFLICT, str(exc)) from exc
     return {"accepted": True, "name": name, "version": item.version, "status": item.status}
+
+
+@router.post("/skills/{name}/versions/{version}/deploy")
+async def deploy_skill_stage(name: str, version: str, payload: SkillStageConfirmation, services=Depends(get_skill_services)):
+    expected = f"ADVANCE {name}@{version} TO {payload.target_stage}"
+    try:
+        item = await services["promotion"].advance(
+            name=name, version=version, target_stage=payload.target_stage,
+            human_approved=payload.confirmation == expected,
+        )
+    except PromotionRejected as exc:
+        raise AppError(ErrorCode.CONFLICT, str(exc)) from exc
+    return {"accepted": True, "name": name, "version": version, "status": item.status}
+
+
+@router.post("/skills/{name}/versions/{version}/suspend")
+async def suspend_skill(name: str, version: str, payload: SkillSuspendConfirmation, services=Depends(get_skill_services)):
+    if payload.confirmation != f"SUSPEND {name}@{version}":
+        raise AppError(ErrorCode.CONFLICT, "必须输入精确的暂停确认短语")
+    try:
+        item = await services["promotion"].suspend(name=name, version=version, reason=payload.reason)
+    except PromotionRejected as exc:
+        raise AppError(ErrorCode.CONFLICT, str(exc)) from exc
+    return {"accepted": True, "name": name, "version": version, "status": item.status}

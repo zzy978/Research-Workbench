@@ -100,7 +100,25 @@ class ContextBuilder:
                 context.original_query, limit=self.session_search_top_k, window=self.session_search_window,
                 exclude_session_id=context.session_id, detail="adaptive",
             )]
-        skills = await self.skill_loader.resolve(resolution.resolved_query, source_mode=context.source_mode.value) if self.skill_loader is not None else {"catalog": [], "selected": None}
+        skills = await self.skill_loader.resolve(resolution.resolved_query, source_mode=context.source_mode.value, run_id=context.run_id) if self.skill_loader is not None else {"catalog": [], "selected": None}
+        if context.config_snapshot.get("disable_skills"):
+            skills["selected"] = None
+        forced_skill = context.config_snapshot.get("forced_skill")
+        if isinstance(forced_skill, dict):
+            if context.config_snapshot.get("evaluation_run") is not True:
+                raise ValueError("forced_skill 只允许用于隔离评测 Run")
+            if context.source_mode.value not in set(forced_skill.get("source_modes") or []):
+                raise ValueError("forced_skill 与 Run source_mode 不兼容")
+            skills["selected"] = forced_skill
+        if context.config_snapshot.get("disable_skills"):
+            skills["selected"] = None
+        forced_skill = context.config_snapshot.get("forced_skill")
+        if isinstance(forced_skill, dict):
+            if context.config_snapshot.get("evaluation_run") is not True:
+                raise ValueError("forced_skill 只允许用于隔离评测 Run")
+            if context.source_mode.value not in set(forced_skill.get("source_modes") or []):
+                raise ValueError("forced_skill 与 Run source_mode 不兼容")
+            skills["selected"] = forced_skill
         artifact_edit = None
         if self.artifact_context_builder is not None:
             artifact_edit = await self.artifact_context_builder.build(

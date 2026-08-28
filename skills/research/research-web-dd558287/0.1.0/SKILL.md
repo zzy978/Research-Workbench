@@ -1,17 +1,17 @@
 ---
-name: research-web-dae24f23
+name: research-web-dd558287
 description: 复用已验证的web研究轨迹，完成问题拆解、同源检索、引用报告和完成验证。
 version: 0.1.0
 status: active
 source_modes:
 - web
 created_from_runs:
-- run_921bda7c40a546e38b6e58b4b038f8f4
+- run_256fa5270e214d58b6d93bda57dc1418
 ---
 
 ## 触发条件
 
-1. 写一篇agent harness的研究进展报告
+1. 请研究神经系统疾病药物治疗的主要类别、代表药物、作用机制与临床挑战，并给出有证据引用的结构化报告。
 
 ## 输入要求
 

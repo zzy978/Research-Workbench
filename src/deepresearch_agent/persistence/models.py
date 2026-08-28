@@ -241,6 +241,53 @@ class EvalRunModel(Base):
     completed_at: Mapped[str | None] = mapped_column(String(40))
 
 
+class LearningReviewJobModel(Base):
+    __tablename__ = "learning_review_jobs"
+    review_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.run_id"), nullable=False)
+    terminal_event_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    policy_version: Mapped[str] = mapped_column(String(32), nullable=False, default="1")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    checkpoint_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    review_pack_json: Mapped[str | None] = mapped_column(Text)
+    proposal_json: Mapped[str | None] = mapped_column(Text)
+    critic_json: Mapped[str | None] = mapped_column(Text)
+    validation_json: Mapped[str | None] = mapped_column(Text)
+    candidate_id: Mapped[str | None] = mapped_column(ForeignKey("skill_candidates.candidate_id"))
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    revision_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    completed_at: Mapped[str | None] = mapped_column(String(40))
+    __table_args__ = (
+        UniqueConstraint("run_id", "terminal_event_id", "policy_version", name="uq_learning_review_idempotency"),
+        Index("ix_learning_review_status", "status", "updated_at"),
+    )
+
+
+class SkillReadMarkModel(Base):
+    __tablename__ = "skill_read_marks"
+    read_mark_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    review_id: Mapped[str] = mapped_column(ForeignKey("learning_review_jobs.review_id"), nullable=False)
+    skill_version_id: Mapped[str] = mapped_column(ForeignKey("skill_versions.skill_version_id"), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    __table_args__ = (UniqueConstraint("review_id", "skill_version_id", name="uq_skill_read_mark"),)
+
+
+class SkillDeploymentModel(Base):
+    __tablename__ = "skill_deployments"
+    deployment_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    skill_version_id: Mapped[str] = mapped_column(ForeignKey("skill_versions.skill_version_id"), nullable=False)
+    stage: Mapped[str] = mapped_column(String(24), nullable=False)
+    allocation_percent: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="active")
+    metrics_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    started_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    stopped_at: Mapped[str | None] = mapped_column(String(40))
+
+
 class AuditEventModel(Base):
     __tablename__ = "audit_events"
     audit_event_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

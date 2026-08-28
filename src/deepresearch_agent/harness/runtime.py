@@ -105,7 +105,10 @@ class HarnessRuntime:
                     selected_skill = context.context_snapshot.get("selected_skill") or {}
                     await self.runs.update_model_snapshot(run_id, {
                         **context.model_snapshot,
-                        "skill": None if not selected_skill else {"name": selected_skill.get("name"), "version": selected_skill.get("version")},
+                        "skill": None if not selected_skill else {
+                            "name": selected_skill.get("name"), "version": selected_skill.get("version"),
+                            "status": (selected_skill.get("selection") or {}).get("status", "active"),
+                        },
                         "context_policy": {
                             "recent_turns": len(context.context_snapshot.get("recent_messages", [])),
                             "memory_snapshot_version": context.context_snapshot.get("memory_snapshot_version", 0),

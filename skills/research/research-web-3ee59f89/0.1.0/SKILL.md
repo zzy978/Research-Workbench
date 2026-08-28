@@ -1,17 +1,17 @@
 ---
-name: research-web-dae24f23
+name: research-web-3ee59f89
 description: 复用已验证的web研究轨迹，完成问题拆解、同源检索、引用报告和完成验证。
 version: 0.1.0
-status: active
+status: candidate
 source_modes:
 - web
 created_from_runs:
-- run_921bda7c40a546e38b6e58b4b038f8f4
+- run_7a85f97bf80647958fdde9762b98e539
 ---
 
 ## 触发条件
 
-1. 写一篇agent harness的研究进展报告
+1. 不要使用之前那个skill
 
 ## 输入要求
 

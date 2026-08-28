@@ -42,10 +42,10 @@ class SkillRegistry:
                 os.unlink(temporary)
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
-    async def register_candidate(self, *, run_id: str, spec: SkillSpec, eval_cases: list[dict] | None = None):
+    async def register_candidate(self, *, run_id: str, spec: SkillSpec, eval_cases: list[dict] | None = None, extra_payload: dict | None = None):
         content = spec.model_copy(update={"status": "candidate"}).render()
         lint = self.linter.lint(spec, content=content)
-        payload = {"spec": spec.model_dump(mode="json"), "content": content, "lint": {"passed": lint.passed, "errors": lint.errors}, "eval_cases": eval_cases or []}
+        payload = {"spec": spec.model_dump(mode="json"), "content": content, "machine_policy": spec.machine_policy, "lint": {"passed": lint.passed, "errors": lint.errors}, "eval_cases": eval_cases or [], **(extra_payload or {})}
         candidate = await self.repository.add_candidate(run_id=run_id, name=spec.name, proposed_version=spec.version, payload=payload)
         if not lint.passed:
             await self.repository.update_candidate_status(candidate.candidate_id, "rejected")
@@ -59,6 +59,23 @@ class SkillRegistry:
         output = []
         for version in await self.repository.list_versions(status="active"):
             output.append((version, self.load(version.content_path, expected_hash=version.content_hash)))
+        return output
+
+    async def selectable_specs(self, *, run_id: str | None = None) -> list[tuple[object, SkillSpec]]:
+        output = await self.active_specs()
+        if not run_id:
+            return output
+        active_names = {spec.name for _, spec in output}
+        for version in await self.repository.list_versions(status="canary"):
+            deployment = await self.repository.latest_deployment(version.skill_version_id)
+            allocation = int(getattr(deployment, "allocation_percent", 0) or 0)
+            bucket = int(hashlib.sha256(f"{run_id}:{version.name}".encode()).hexdigest()[:8], 16) % 100
+            if bucket >= allocation:
+                continue
+            spec = self.load(version.content_path, expected_hash=version.content_hash)
+            output = [(v, s) for v, s in output if s.name != spec.name]
+            output.append((version, spec))
+            active_names.add(spec.name)
         return output
 
     def load(self, relative_path: str, *, expected_hash: str | None = None) -> SkillSpec:
