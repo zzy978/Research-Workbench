@@ -26,3 +26,4 @@ outputs/
 *.egg-info/
 .local-run/
 backups/
+tmp/
