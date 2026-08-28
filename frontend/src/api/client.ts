@@ -1,4 +1,4 @@
-import { ApiError, CacheStats, Capabilities, ContextInspector, CuratedMemory, Evidence, MemoryCapacity, Report, Run, Session, SessionDetail, SourceMode, WhiteboardLog, WorkflowMode } from "../types/api";
+import { ApiError, CacheStats, Capabilities, ContextInspector, CuratedMemory, Evidence, EvolutionOverview, EvolutionReviewDetail, EvolutionReviewSummary, MemoryCapacity, Report, Run, Session, SessionDetail, SourceMode, WhiteboardLog, WorkflowMode } from "../types/api";
 
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api/v1").replace(/\/$/, "");
 
@@ -39,8 +39,15 @@ export const api = {
   skill: (name: string, version: string) => request<Record<string, unknown>>(`/skills/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}`),
   skillCandidate: (id: string) => request<Record<string, unknown>>(`/skills/candidates/${encodeURIComponent(id)}`),
   evaluateSkillCandidate: (id: string) => request<Record<string, unknown>>(`/skills/candidates/${encodeURIComponent(id)}/evaluate`, {method: "POST"}),
-  promoteSkillCandidate: (id: string) => request<Record<string, unknown>>(`/skills/candidates/${encodeURIComponent(id)}/promote`, {method: "POST"}),
+  promoteSkillCandidate: (id: string, confirmation: string) => request<Record<string, unknown>>(`/skills/candidates/${encodeURIComponent(id)}/promote`, {method: "POST", body: JSON.stringify({confirmation})}),
   evaluateSkill: (name: string, version: string) => request<Record<string, unknown>>(`/skills/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}/evaluate`, {method: "POST"}),
-  promoteSkill: (name: string, version: string) => request<Record<string, unknown>>(`/skills/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}/promote`, {method: "POST"}),
+  promoteSkill: (name: string, version: string, confirmation: string) => request<Record<string, unknown>>(`/skills/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}/promote`, {method: "POST", body: JSON.stringify({confirmation})}),
+  deploySkill: (name: string, version: string, targetStage: string, confirmation: string) => request<Record<string, unknown>>(`/skills/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}/deploy`, {method: "POST", body: JSON.stringify({target_stage: targetStage, confirmation})}),
+  suspendSkill: (name: string, version: string, reason: string, confirmation: string) => request<Record<string, unknown>>(`/skills/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}/suspend`, {method: "POST", body: JSON.stringify({reason, confirmation})}),
+  learningReview: (id: string) => request<Record<string, unknown>>(`/learning-reviews/${encodeURIComponent(id)}`),
+  evolutionOverview: () => request<EvolutionOverview>("/evolution/overview"),
+  evolutionReviews: (status = "", q = "") => request<{items: EvolutionReviewSummary[]; total: number}>(`/evolution/reviews?status=${encodeURIComponent(status)}&q=${encodeURIComponent(q)}`),
+  evolutionReview: (id: string) => request<EvolutionReviewDetail>(`/evolution/reviews/${encodeURIComponent(id)}`),
+  retryLearningReview: (id: string) => request<Record<string, unknown>>(`/learning-reviews/${encodeURIComponent(id)}/retry`, {method: "POST"}),
   rollbackSkill: (name: string) => request<Record<string, unknown>>(`/skills/${encodeURIComponent(name)}/rollback`, {method: "POST"}),
 };

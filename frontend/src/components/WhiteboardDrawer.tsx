@@ -9,6 +9,14 @@ const EVENT_LABELS: Record<string, string> = {
   "tool.completed": "工具实时返回", "tool.failed": "工具失败", "evidence.added": "证据入账",
   "report.completed": "报告完成", "verification.completed": "验证完成", "run.completed": "Run 完成",
   "run.failed": "Run 失败", "run.retrying": "Run 重试",
+  "learning.review.queued": "学习复盘已入队", "learning.review.started": "学习复盘开始",
+  "learning.review.ignored": "学习复盘无可沉淀内容", "learning.review.failed": "学习复盘失败",
+  "learning.review.retried": "学习复盘已重试",
+  "skill.critic.rejected": "Skill Critic 驳回", "skill.validation.failed": "Skill 确定性校验失败",
+  "skill.candidate.created": "Skill Candidate 已创建", "skill.candidate_created": "Skill Candidate 已创建",
+  "skill.shadow_started": "Skill 进入 Shadow",
+  "skill.canary_started": "Skill 进入 Canary", "skill.activated": "Skill 正式启用",
+  "skill.suspended": "Skill 已暂停",
 };
 
 function entryTitle(entry: WhiteboardEntry) {

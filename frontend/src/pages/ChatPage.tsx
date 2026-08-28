@@ -294,6 +294,11 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
       </div>
     </header>
 
+    {contextInspector.data?.selected_skill && <details className="runtime-skill-banner">
+      <summary><span>本次已加载 Skill</span><strong>{String(contextInspector.data.selected_skill.name)}@{String(contextInspector.data.selected_skill.version)}</strong><em>{String((contextInspector.data.selected_skill.selection as Record<string, unknown> | undefined)?.status ?? "active")}</em></summary>
+      <div><p>匹配来源：{run?.source_mode} · Policy 消费者：{contextInspector.data.skill_policy_consumers?.join("、") || "Planner、Worker、Reflection、Reporter、Verifier"}</p><pre>{JSON.stringify(contextInspector.data.active_skill_policy ?? contextInspector.data.selected_skill.machine_policy ?? {}, null, 2)}</pre></div>
+    </details>}
+
     <div className="chat-body">
       <CanvasBoard
         runId={runId}

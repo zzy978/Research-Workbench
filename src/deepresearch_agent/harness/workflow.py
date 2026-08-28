@@ -26,6 +26,7 @@ from deepresearch_agent.config.settings import (
     REPORT_SECTION_EVIDENCE_BUDGET,
     VERIFICATION_RESERVED_TOKENS,
 )
+from deepresearch_agent.evolution.skill_compiler import compile_runtime_policy, policy_prompt
 
 from .run_context import RunContext
 from .report_safety import add_inline_citations, citation_evidence_ids, has_internal_material, rank_evidence, sanitize_report
@@ -96,14 +97,19 @@ class PlanExecuteReportDriver:
         self.context = context
         self.orchestrator = orchestrator
         self.events = events
+        self.selected_skill = (context.context_snapshot or {}).get("selected_skill") or None
+        self.skill_policy = compile_runtime_policy(self.selected_skill, source_mode=context.source_mode.value)
+        runtime_snapshot = dict(context.context_snapshot or context.config_snapshot)
+        runtime_snapshot["active_skill_policy"] = self.skill_policy
+        runtime_snapshot["skill_policy_consumers"] = ["planner", "worker", "reflection", "reporter", "verifier"] if self.skill_policy else []
         self.state = PlanExecuteState(
             session_id=context.session_id, run_id=context.run_id,
             source_mode=context.source_mode.value, workflow_mode=context.workflow_mode.value,
             budget_state={"limits": context.budget_limits.model_dump(), "usage": context.budget_usage.model_dump()},
-            context_snapshot=context.context_snapshot or context.config_snapshot,
+            context_snapshot=runtime_snapshot,
             # Planning must reason about the user's request, not the serialized
             # system/context envelope. The latter remains available separately.
-            input=context.resolved_query or context.original_query,
+            input=(context.resolved_query or context.original_query) + policy_prompt(self.skill_policy),
         )
         self.planner_result: PlannerResult | None = None
         self.report_result: ReportResult | None = None

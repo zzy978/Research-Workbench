@@ -167,6 +167,8 @@ async def get_context_inspector(
         "historical_recall": snapshot.get("historical_recall", []),
         "used_session_ids": snapshot.get("used_session_ids", []),
         "selected_skill": snapshot.get("selected_skill"),
+        "active_skill_policy": snapshot.get("active_skill_policy"),
+        "skill_policy_consumers": snapshot.get("skill_policy_consumers", []),
         "artifact_edit": artifact_edit,
         "artifact_verification": artifact_verification,
     }

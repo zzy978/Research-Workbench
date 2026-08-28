@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Optional
 
 from sqlalchemy import func, select, text, update
 
 from deepresearch_agent.persistence.database import Database
-from deepresearch_agent.persistence.models import AuditEventModel, EvalRunModel, MemoryModel, SkillCandidateModel, SkillVersionModel
+from deepresearch_agent.persistence.models import (
+    AuditEventModel, EvalRunModel, LearningReviewJobModel, MemoryModel,
+    SkillCandidateModel, SkillDeploymentModel, SkillReadMarkModel, SkillVersionModel,
+)
 
 from .utils import json_text, new_id, utc_now_iso
 
@@ -192,6 +196,165 @@ class SkillRepository:
     async def update_version_hash(self, name: str, version: str, content_hash: str) -> bool:
         async with self.database.transaction() as session:
             result = await session.execute(update(SkillVersionModel).where(SkillVersionModel.name == name, SkillVersionModel.version == version).values(content_hash=content_hash))
+            return result.rowcount == 1
+
+    async def add_read_mark(self, *, review_id: str, version: SkillVersionModel) -> SkillReadMarkModel:
+        async with self.database.transaction() as session:
+            existing = (await session.execute(select(SkillReadMarkModel).where(
+                SkillReadMarkModel.review_id == review_id,
+                SkillReadMarkModel.skill_version_id == version.skill_version_id,
+            ))).scalar_one_or_none()
+            if existing is not None:
+                return existing
+            item = SkillReadMarkModel(
+                read_mark_id=new_id("srm"), review_id=review_id,
+                skill_version_id=version.skill_version_id, content_hash=version.content_hash,
+                created_at=utc_now_iso(),
+            )
+            session.add(item)
+            return item
+
+    async def get_read_mark(self, *, review_id: str, skill_version_id: str) -> Optional[SkillReadMarkModel]:
+        async with self.database.sessions() as session:
+            return (await session.execute(select(SkillReadMarkModel).where(
+                SkillReadMarkModel.review_id == review_id,
+                SkillReadMarkModel.skill_version_id == skill_version_id,
+            ))).scalar_one_or_none()
+
+    async def add_deployment(self, *, version: SkillVersionModel, stage: str, allocation_percent: int) -> SkillDeploymentModel:
+        item = SkillDeploymentModel(
+            deployment_id=new_id("dep"), skill_version_id=version.skill_version_id,
+            stage=stage, allocation_percent=max(0, min(100, allocation_percent)),
+            status="active", metrics_json="{}", started_at=utc_now_iso(),
+        )
+        async with self.database.transaction() as session:
+            session.add(item)
+        return item
+
+    async def latest_deployment(self, skill_version_id: str) -> Optional[SkillDeploymentModel]:
+        async with self.database.sessions() as session:
+            return (await session.execute(select(SkillDeploymentModel).where(
+                SkillDeploymentModel.skill_version_id == skill_version_id,
+                SkillDeploymentModel.status == "active",
+            ).order_by(SkillDeploymentModel.started_at.desc()))).scalars().first()
+
+    async def transition_deployment(self, *, version: SkillVersionModel, stage: str, allocation_percent: int) -> SkillDeploymentModel:
+        async with self.database.transaction() as session:
+            now = utc_now_iso()
+            await session.execute(update(SkillDeploymentModel).where(
+                SkillDeploymentModel.skill_version_id == version.skill_version_id,
+                SkillDeploymentModel.status == "active",
+            ).values(status="stopped", stopped_at=now))
+            current = await session.get(SkillVersionModel, version.skill_version_id)
+            if current is None:
+                raise ValueError("Skill 版本不存在")
+            current.status = stage
+            item = SkillDeploymentModel(
+                deployment_id=new_id("dep"), skill_version_id=version.skill_version_id,
+                stage=stage, allocation_percent=max(0, min(100, allocation_percent)),
+                status="active", metrics_json="{}", started_at=now,
+            )
+            session.add(item)
+            return item
+
+    async def record_deployment_outcome(self, skill_version_id: str, *, succeeded: bool, safety_violation: bool = False) -> dict[str, Any]:
+        async with self.database.transaction() as session:
+            item = (await session.execute(select(SkillDeploymentModel).where(
+                SkillDeploymentModel.skill_version_id == skill_version_id,
+                SkillDeploymentModel.status == "active",
+            ).order_by(SkillDeploymentModel.started_at.desc()))).scalars().first()
+            if item is None:
+                return {}
+            metrics = json.loads(item.metrics_json or "{}")
+            metrics["runs"] = int(metrics.get("runs", 0)) + 1
+            metrics["failures"] = int(metrics.get("failures", 0)) + (0 if succeeded else 1)
+            metrics["safety_violations"] = int(metrics.get("safety_violations", 0)) + (1 if safety_violation else 0)
+            metrics["failure_rate"] = metrics["failures"] / metrics["runs"]
+            item.metrics_json = json_text(metrics)
+            return metrics
+
+    async def activate_staged(self, *, candidate_id: str, version: SkillVersionModel, content_hash: str) -> bool:
+        async with self.database.transaction() as session:
+            candidate = await session.get(SkillCandidateModel, candidate_id)
+            target = await session.get(SkillVersionModel, version.skill_version_id)
+            if candidate is None or target is None or target.status != "canary":
+                return False
+            await session.execute(update(SkillVersionModel).where(
+                SkillVersionModel.name == target.name, SkillVersionModel.status == "active"
+            ).values(status="previous"))
+            target.status = "active"
+            target.content_hash = content_hash
+            candidate.status = "promoted"
+            return True
+
+
+class LearningReviewRepository:
+    TERMINAL = {"completed", "rejected", "failed", "cancelled"}
+
+    def __init__(self, database: Database):
+        self.database = database
+
+    async def enqueue(self, *, run_id: str, terminal_event_id: int, policy_version: str = "1") -> LearningReviewJobModel:
+        async with self.database.transaction() as session:
+            existing = (await session.execute(select(LearningReviewJobModel).where(
+                LearningReviewJobModel.run_id == run_id,
+                LearningReviewJobModel.terminal_event_id == terminal_event_id,
+                LearningReviewJobModel.policy_version == policy_version,
+            ))).scalar_one_or_none()
+            if existing is not None:
+                return existing
+            now = utc_now_iso()
+            item = LearningReviewJobModel(
+                review_id=new_id("review"), run_id=run_id,
+                terminal_event_id=terminal_event_id, policy_version=policy_version,
+                status="queued", checkpoint_json="{}", retry_count=0,
+                revision_count=0, created_at=now, updated_at=now,
+            )
+            session.add(item)
+            return item
+
+    async def get(self, review_id: str) -> Optional[LearningReviewJobModel]:
+        async with self.database.sessions() as session:
+            return await session.get(LearningReviewJobModel, review_id)
+
+    async def pending(self) -> list[LearningReviewJobModel]:
+        async with self.database.sessions() as session:
+            return list((await session.execute(select(LearningReviewJobModel).where(
+                LearningReviewJobModel.status.not_in(self.TERMINAL)
+            ).order_by(LearningReviewJobModel.created_at))).scalars())
+
+    async def list_for_run(self, run_id: str) -> list[LearningReviewJobModel]:
+        async with self.database.sessions() as session:
+            return list((await session.execute(select(LearningReviewJobModel).where(
+                LearningReviewJobModel.run_id == run_id
+            ).order_by(LearningReviewJobModel.created_at.desc()))).scalars())
+
+    async def update(self, review_id: str, *, status: str, checkpoint: dict | None = None,
+                     review_pack: dict | None = None, proposal: dict | None = None,
+                     critic: dict | None = None, validation: dict | None = None,
+                     candidate_id: str | None = None, error_message: str | None = None,
+                     retry_count: int | None = None, revision_count: int | None = None,
+                     reset_outputs: bool = False) -> bool:
+        values: dict[str, Any] = {"status": status, "updated_at": utc_now_iso()}
+        if reset_outputs:
+            values.update({
+                "review_pack_json": None, "proposal_json": None, "critic_json": None,
+                "validation_json": None, "candidate_id": None, "completed_at": None,
+            })
+        if checkpoint is not None: values["checkpoint_json"] = json_text(checkpoint)
+        if review_pack is not None: values["review_pack_json"] = json_text(review_pack)
+        if proposal is not None: values["proposal_json"] = json_text(proposal)
+        if critic is not None: values["critic_json"] = json_text(critic)
+        if validation is not None: values["validation_json"] = json_text(validation)
+        if candidate_id is not None: values["candidate_id"] = candidate_id
+        if error_message is not None: values["error_message"] = error_message
+        if retry_count is not None: values["retry_count"] = retry_count
+        if revision_count is not None: values["revision_count"] = revision_count
+        if status in self.TERMINAL: values["completed_at"] = utc_now_iso()
+        async with self.database.transaction() as session:
+            result = await session.execute(update(LearningReviewJobModel).where(
+                LearningReviewJobModel.review_id == review_id
+            ).values(**values))
             return result.rowcount == 1
 
 

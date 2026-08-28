@@ -19,7 +19,7 @@ from deepresearch_agent.persistence import Database
 from deepresearch_agent.persistence.repositories import RunRepository, SessionRepository
 from deepresearch_agent.memory import MemoryService
 from deepresearch_agent.persistence.repositories import AuditRepository, MemoryRepository
-from deepresearch_agent.persistence.repositories import SkillRepository
+from deepresearch_agent.persistence.repositories import LearningReviewRepository, SkillRepository
 from deepresearch_agent.evolution import PromotionPolicy, SkillEvaluator
 
 
@@ -64,8 +64,14 @@ def create_app(
     app.state.skill_services = {
         "repository": skill_repository,
         "registry": run_service.skill_registry,
-        "evaluator": SkillEvaluator(skill_repository),
-        "promotion": PromotionPolicy(skill_repository, run_service.skill_registry, AuditRepository(database)),
+        "evaluator": SkillEvaluator(skill_repository, case_runner=run_service.run_evaluation_case if workflow_factory is None else None),
+        "promotion": run_service.skill_promotion if workflow_factory is None else PromotionPolicy(
+            skill_repository, run_service.skill_registry, AuditRepository(database),
+        ),
+        "learning": run_service.skill_learning,
+        "reviews": LearningReviewRepository(database),
+        "events": run_service.event_bus,
+        "test_mode": workflow_factory is not None,
     }
     app.add_middleware(CORSMiddleware, allow_origins=list(settings.FRONTEND_ORIGINS), allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 
