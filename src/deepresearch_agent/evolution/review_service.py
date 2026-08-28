@@ -87,6 +87,7 @@ class SkillLearningService:
         await self.repository.update(
             review_id, status="queued", retry_count=0, revision_count=0,
             error_message="", checkpoint={"stage": "queued", "reason": "explicit_retry"},
+            reset_outputs=True,
         )
         self._tasks.pop(review_id, None)
         self.schedule(review_id)
@@ -127,7 +128,20 @@ class SkillLearningService:
             pack = await self._enrich_catalog(await self.builder.build(review_id=review_id, run_id=job.run_id))
             await self.repository.update(review_id, status="proposing", review_pack=pack.model_dump(mode="json"), checkpoint={"stage": "proposing"})
             await self._publish(job.run_id, "learning.review.started", {"review_id": review_id})
+            await self._publish(job.run_id, "learning.review_pack.built", {
+                "review_id": review_id,
+                "episodes": len(pack.episodes),
+                "decision_cards": sum(len(episode.cards) for episode in pack.episodes),
+                "trace_refs": sum(len(episode.trace_refs) for episode in pack.episodes),
+                "loaded_skills": len(pack.loaded_skills),
+            })
             proposal = await self.proposer.propose(pack)
+            await self._publish(job.run_id, "skill.proposal.created", {
+                "review_id": review_id, "decision": proposal.decision,
+                "name": proposal.name or proposal.target_skill_id,
+                "version": proposal.proposed_version or proposal.base_version,
+                "trace_refs": len(proposal.trace_refs),
+            })
             if proposal.decision == "ignore":
                 await self.repository.update(review_id, status="completed", proposal=proposal.model_dump(mode="json"), error_message="", checkpoint={"stage": "ignored"})
                 await self._publish(job.run_id, "learning.review.ignored", {"review_id": review_id, "rationale": proposal.rationale})
@@ -140,17 +154,46 @@ class SkillLearningService:
                     raise ValueError("Proposer 的 base_content_hash 与已读取版本不一致")
             await self.repository.update(review_id, status="criticizing", proposal=proposal.model_dump(mode="json"), checkpoint={"stage": "criticizing"})
             critic = await self.critic.review(pack, proposal)
+            await self._publish(job.run_id, "skill.critic.completed", {
+                "review_id": review_id, "decision": critic.decision,
+                "blocking_issues": critic.blocking_issues,
+                "scores": critic.scores,
+            })
             revision_count = 0
             if critic.decision == "revise":
                 revision_count = 1
                 await self.repository.update(review_id, status="revising", critic=critic.model_dump(mode="json"), revision_count=1, checkpoint={"stage": "revising"})
                 proposal = await self.proposer.propose(pack, revision_instructions=critic.revision_instructions)
+                await self._publish(job.run_id, "skill.proposal.revised", {
+                    "review_id": review_id, "revision": 1,
+                    "instructions": critic.revision_instructions,
+                })
+                if proposal.decision == "ignore":
+                    await self.repository.update(
+                        review_id, status="completed", proposal=proposal.model_dump(mode="json"),
+                        critic=critic.model_dump(mode="json"), error_message="", revision_count=1,
+                        checkpoint={"stage": "ignored_after_revision"},
+                    )
+                    await self._publish(job.run_id, "learning.review.ignored", {
+                        "review_id": review_id, "rationale": proposal.rationale,
+                        "after_revision": True,
+                    })
+                    return await self.repository.get(review_id)
                 critic = await self.critic.review(pack, proposal)
+                await self._publish(job.run_id, "skill.critic.completed", {
+                    "review_id": review_id, "decision": critic.decision,
+                    "blocking_issues": critic.blocking_issues,
+                    "scores": critic.scores, "revision": 1,
+                })
             if critic.decision != "pass":
                 await self.repository.update(review_id, status="rejected", proposal=proposal.model_dump(mode="json"), critic=critic.model_dump(mode="json"), error_message="", revision_count=revision_count, checkpoint={"stage": "rejected"})
                 await self._publish(job.run_id, "skill.critic.rejected", {"review_id": review_id, "issues": critic.blocking_issues})
                 return await self.repository.get(review_id)
             validation = self.validators.validate(pack, proposal)
+            await self._publish(job.run_id, "skill.validation.completed", {
+                "review_id": review_id, "passed": validation.passed,
+                "errors": validation.errors, "warnings": validation.warnings,
+            })
             if not validation.passed:
                 await self.repository.update(review_id, status="rejected", proposal=proposal.model_dump(mode="json"), critic=critic.model_dump(mode="json"), validation=validation.model_dump(mode="json"), error_message="", checkpoint={"stage": "validation_failed"})
                 await self._publish(job.run_id, "skill.validation.failed", {"review_id": review_id, "errors": validation.errors})

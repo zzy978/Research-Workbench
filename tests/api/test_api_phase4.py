@@ -11,7 +11,7 @@ from backend.app.schemas import MessageCreate, RunCreate, SessionCreate
 from deepresearch_agent.agents.multi_agent.core.execution_record import ExecutionMetadata, ExecutionRecord, ToolCall
 from deepresearch_agent.agents.multi_agent.core.retrieval_result import RetrievalMetadata, RetrievalResult
 from deepresearch_agent.harness import SourceMode, WorkflowMode
-from deepresearch_agent.persistence.repositories import CheckpointRepository, RunRepository, SessionRepository
+from deepresearch_agent.persistence.repositories import CheckpointRepository, LearningReviewRepository, RunRepository, SessionRepository
 from deepresearch_agent.context import ArtifactEditContextBuilder
 from deepresearch_agent.evolution import SkillSpec
 
@@ -353,3 +353,34 @@ def test_skill_candidate_detail_and_id_scoped_actions(client):
     assert evaluated.status_code == 200 and evaluated.json()["candidate_id"] == candidate.candidate_id
     promoted = client.post(f"/api/v1/skills/candidates/{candidate.candidate_id}/promote")
     assert promoted.status_code == 200 and promoted.json()["status"] == "active"
+
+
+def test_evolution_dashboard_exposes_every_learning_stage(client):
+    run_id = send(client, new_session(client)).json()["run_id"]
+    assert wait_terminal(client, run_id)["status"] == "completed"
+
+    async def seed_review():
+        repository = LearningReviewRepository(client.app.state.database)
+        review = await repository.enqueue(run_id=run_id, terminal_event_id=999)
+        await repository.update(
+            review.review_id, status="completed",
+            review_pack={"run_id": run_id, "episodes": [{"episode_type": "success", "cards": []}], "artifact_refs": [f"run:{run_id}"]},
+            proposal={"decision": "create", "name": "observable-evolution", "proposed_version": "0.1.0", "rationale": "可复用"},
+            critic={"decision": "pass", "scores": {"grounding": 1.0}, "blocking_issues": []},
+            validation={"passed": True, "errors": [], "warnings": []},
+            checkpoint={"stage": "completed"},
+        )
+        return review.review_id
+
+    review_id = client.portal.call(seed_review)
+    overview = client.get("/api/v1/evolution/overview")
+    assert overview.status_code == 200 and overview.json()["reviews"]["total"] >= 1
+    listing = client.get("/api/v1/evolution/reviews", params={"q": "observable-evolution"})
+    assert listing.status_code == 200 and listing.json()["items"][0]["review_id"] == review_id
+    detail = client.get(f"/api/v1/evolution/reviews/{review_id}")
+    assert detail.status_code == 200
+    payload = detail.json()
+    assert payload["proposal"]["decision"] == "create"
+    assert payload["critic"]["decision"] == "pass"
+    assert payload["validation"]["passed"] is True
+    assert payload["run"]["workflow_mode"] in {"deep_research", "plan_execute_report"}

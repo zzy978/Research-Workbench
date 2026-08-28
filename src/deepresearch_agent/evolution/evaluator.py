@@ -16,7 +16,7 @@ class SkillEvaluator:
         self.repository, self.linter, self.case_runner = repository, linter or SkillLinter(), case_runner
         self.semantic_judge = semantic_judge
 
-    async def evaluate(self, candidate_id: str, *, metric_overrides: dict | None = None):
+    async def evaluate(self, candidate_id: str, *, metric_overrides: dict | None = None, progress=None):
         candidate = await self.repository.get_candidate(candidate_id)
         if candidate is None:
             raise ValueError("Skill candidate 不存在")
@@ -40,7 +40,7 @@ class SkillEvaluator:
         }
         if self.case_runner is not None:
             pairs = []
-            for case in cases:
+            for case_index, case in enumerate(cases):
                 query = str(case.get("query") or "").strip()
                 if not query:
                     continue
@@ -49,6 +49,9 @@ class SkillEvaluator:
                     "source_mode": case.get("source_mode") or case.get("expected_source") or spec.source_modes[0],
                     "workflow_mode": case.get("workflow_mode") or "plan_execute_report",
                 }
+                if progress is not None:
+                    update = progress({"phase": "case_started", "case_index": case_index, "split": case.get("split", "eval"), "arm": "control", "query": query[:240]})
+                    if inspect.isawaitable(update): await update
                 control = self.case_runner(**common, forced_skill=None)
                 treatment = self.case_runner(**common, forced_skill={
                     "name": spec.name, "version": spec.version, "content": payload.get("content", ""),
@@ -56,7 +59,15 @@ class SkillEvaluator:
                     "machine_policy": spec.machine_policy,
                 })
                 if inspect.isawaitable(control): control = await control
+                if progress is not None:
+                    update = progress({"phase": "arm_completed", "case_index": case_index, "split": case.get("split", "eval"), "arm": "control", "result": control})
+                    if inspect.isawaitable(update): await update
+                    update = progress({"phase": "case_started", "case_index": case_index, "split": case.get("split", "eval"), "arm": "treatment", "query": query[:240]})
+                    if inspect.isawaitable(update): await update
                 if inspect.isawaitable(treatment): treatment = await treatment
+                if progress is not None:
+                    update = progress({"phase": "arm_completed", "case_index": case_index, "split": case.get("split", "eval"), "arm": "treatment", "result": treatment})
+                    if inspect.isawaitable(update): await update
                 pair = {"case": case, "control": control, "treatment": treatment}
                 if self.semantic_judge is not None:
                     judgement = await self.semantic_judge.judge(case=case, control=control, treatment=treatment)
@@ -92,5 +103,8 @@ class SkillEvaluator:
         )
         result = await self.repository.add_eval(candidate_id=candidate_id, status="passed" if passed else "failed", metrics=metrics)
         await self.repository.update_candidate_status(candidate_id, "evaluated" if passed else "rejected")
+        if progress is not None:
+            update = progress({"phase": "evaluation_completed", "eval_run_id": result.eval_run_id, "status": result.status, "metrics": metrics})
+            if inspect.isawaitable(update): await update
         return result
 

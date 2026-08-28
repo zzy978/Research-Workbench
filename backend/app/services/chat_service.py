@@ -1,7 +1,7 @@
 """Transactional chat command service."""
 
 from backend.app.schemas import MessageCreate, MessageSend, RunAccepted, RunCreate
-from deepresearch_agent.config.settings import HARNESS_BUDGETS
+from deepresearch_agent.config.settings import HARNESS_BUDGETS, LEARNING_REVIEW_MODEL, OPENAI_LLM_MODEL
 from deepresearch_agent.harness.errors import AppError, ErrorCode
 from deepresearch_agent.persistence.repositories import RunRepository, SessionRepository
 
@@ -42,6 +42,10 @@ class ChatService:
             ),
         )
         if created:
+            await self.runs.update_model_snapshot(run.run_id, {
+                "llm_model": OPENAI_LLM_MODEL,
+                "learning_review_model": LEARNING_REVIEW_MODEL,
+            })
             if session.title.strip() in {"新对话", "New conversation", "Untitled"}:
                 title = " ".join(request.content.strip().split())[:36]
                 if title:

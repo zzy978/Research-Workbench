@@ -13,7 +13,8 @@ const EVENT_LABELS: Record<string, string> = {
   "learning.review.ignored": "学习复盘无可沉淀内容", "learning.review.failed": "学习复盘失败",
   "learning.review.retried": "学习复盘已重试",
   "skill.critic.rejected": "Skill Critic 驳回", "skill.validation.failed": "Skill 确定性校验失败",
-  "skill.candidate.created": "Skill Candidate 已创建", "skill.shadow_started": "Skill 进入 Shadow",
+  "skill.candidate.created": "Skill Candidate 已创建", "skill.candidate_created": "Skill Candidate 已创建",
+  "skill.shadow_started": "Skill 进入 Shadow",
   "skill.canary_started": "Skill 进入 Canary", "skill.activated": "Skill 正式启用",
   "skill.suspended": "Skill 已暂停",
 };

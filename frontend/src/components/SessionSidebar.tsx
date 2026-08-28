@@ -43,6 +43,7 @@ export function SessionSidebar({ sessions, selected, collapsed, onToggle, onSele
       <NavLink to="/"><span className="nav-icon">⌁</span>{!collapsed && <span className="nav-label">聊天研究</span>}</NavLink>
       <NavLink to="/memories"><span className="nav-icon">◇</span>{!collapsed && <span className="nav-label">Memory</span>}</NavLink>
       <NavLink to="/skills"><span className="nav-icon">△</span>{!collapsed && <span className="nav-label">Skills</span>}</NavLink>
+      <NavLink to="/evolution"><span className="nav-icon">◎</span>{!collapsed && <span className="nav-label">自进化</span>}</NavLink>
       <NavLink to="/status"><span className="nav-icon">○</span>{!collapsed && <span className="nav-label">系统状态</span>}</NavLink>
     </nav>
   </motion.aside>;

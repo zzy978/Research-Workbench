@@ -42,6 +42,30 @@ class JsonLLM:
         }, ensure_ascii=False)})()
 
 
+class RecordingEvents:
+    def __init__(self):
+        self.items = []
+
+    async def publish(self, run_id, event_type, *, stage=None, payload=None):
+        self.items.append({"run_id": run_id, "event_type": event_type, "stage": stage, "payload": payload or {}})
+
+
+class ReviseToIgnoreLLM:
+    def __init__(self):
+        self.proposals = 0
+
+    async def ainvoke(self, prompt):
+        if "Skill Critic" in prompt:
+            return type("Response", (), {"content": json.dumps({
+                "decision": "revise", "scores": {"grounding": .8}, "blocking_issues": [],
+                "revision_instructions": ["没有稳定增量时忽略"], "unsupported_rule_refs": [], "conflict_refs": [],
+            })})()
+        self.proposals += 1
+        if self.proposals > 1:
+            return type("Response", (), {"content": json.dumps({"decision": "ignore", "rationale": "修订后确认没有可复用增量"}, ensure_ascii=False)})()
+        return await JsonLLM().ainvoke(prompt)
+
+
 @pytest_asyncio.fixture
 async def env(tmp_path):
     database = Database(f"sqlite+aiosqlite:///{(tmp_path / 'learning.db').as_posix()}")
@@ -71,9 +95,10 @@ async def completed_run(database):
 async def test_background_review_creates_traceable_candidate(env):
     database, skills, registry = env
     run = await completed_run(database)
+    events = RecordingEvents()
     service = SkillLearningService(
         database, LearningReviewRepository(database), skills, registry,
-        proposer_llm=JsonLLM(), critic_llm=JsonLLM(), enabled=True,
+        proposer_llm=JsonLLM(), critic_llm=JsonLLM(), events=events, enabled=True,
     )
     job = await service.enqueue_for_run(run.run_id)
     await service._tasks[job.review_id]
@@ -84,6 +109,30 @@ async def test_background_review_creates_traceable_candidate(env):
     assert payload["review_id"] == job.review_id
     assert payload["proposal"]["trace_refs"] == ["tool_call:call-one"]
     assert payload["machine_policy"]["budgets"]["max_retries"] == 2
+    event_types = {item["event_type"] for item in events.items}
+    assert {"learning.review_pack.built", "skill.proposal.created", "skill.critic.completed", "skill.validation.completed", "skill.candidate.created"}.issubset(event_types)
+
+
+@pytest.mark.asyncio
+async def test_revision_to_ignore_completes_without_false_rejection(env):
+    database, skills, registry = env
+    run = await completed_run(database)
+    llm = ReviseToIgnoreLLM()
+    events = RecordingEvents()
+    service = SkillLearningService(
+        database, LearningReviewRepository(database), skills, registry,
+        proposer_llm=llm, critic_llm=llm, events=events, enabled=True,
+    )
+    job = await service.enqueue_for_run(run.run_id)
+    await service._tasks[job.review_id]
+    saved = await LearningReviewRepository(database).get(job.review_id)
+    assert saved.status == "completed" and saved.candidate_id is None
+    assert json.loads(saved.checkpoint_json)["stage"] == "ignored_after_revision"
+    assert any(item["event_type"] == "learning.review.ignored" for item in events.items)
+    repository = LearningReviewRepository(database)
+    await repository.update(saved.review_id, status="queued", reset_outputs=True)
+    reset = await repository.get(saved.review_id)
+    assert reset.proposal_json is None and reset.critic_json is None and reset.completed_at is None
 
 
 def test_validator_blocks_permission_expansion():
@@ -131,8 +180,11 @@ async def test_real_replay_gate_and_staged_promotion(env):
     async def runner(**kwargs):
         return {"completed": True, "citation_integrity": 1, "claim_support": 1, "tool_policy_violations": 0, "source_leakage": 0, "safety_passed": True, "llm_tokens": 100, "wall_time_seconds": 1}
 
-    result = await SkillEvaluator(skills, case_runner=runner).evaluate(candidate.candidate_id)
+    progress = []
+    result = await SkillEvaluator(skills, case_runner=runner).evaluate(candidate.candidate_id, progress=lambda item: progress.append(item))
     assert result.status == "passed" and json.loads(result.metrics_json)["real_replay"] is True
+    assert sum(item["phase"] == "arm_completed" for item in progress) == 6
+    assert progress[-1]["phase"] == "evaluation_completed"
     policy = PromotionPolicy(skills, registry, AuditRepository(database), require_real_replay=True, staged=True, canary_percent=5)
     shadow = await policy.promote(name=skill.name, version=skill.version, candidate_id=candidate.candidate_id, human_approved=True)
     assert shadow.status == "shadow"

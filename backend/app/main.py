@@ -70,6 +70,7 @@ def create_app(
         ),
         "learning": run_service.skill_learning,
         "reviews": LearningReviewRepository(database),
+        "events": run_service.event_bus,
         "test_mode": workflow_factory is not None,
     }
     app.add_middleware(CORSMiddleware, allow_origins=list(settings.FRONTEND_ORIGINS), allow_credentials=False, allow_methods=["*"], allow_headers=["*"])

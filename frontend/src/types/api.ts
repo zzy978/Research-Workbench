@@ -72,7 +72,39 @@ export interface ContextInspector {
   curated_memory: CuratedMemory[]; recent_messages: ContextMessage[]; session_summary: Record<string, unknown>;
   historical_recall_searched: boolean; historical_recall: HistoricalRecall[]; used_session_ids: string[];
   selected_skill?: Record<string, unknown> | null; artifact_edit?: Record<string, unknown> | null;
+  active_skill_policy?: Record<string, unknown> | null; skill_policy_consumers?: string[];
   artifact_verification?: ArtifactVerification | null;
+}
+
+export interface EvolutionOverview {
+  reviews: {total: number; by_status: Record<string, number>};
+  candidates: {total: number; by_status: Record<string, number>};
+  evaluations: {total: number; by_status: Record<string, number>; real_replay: number};
+  versions: {total: number; by_status: Record<string, number>};
+  deployments: {active: number; canary: number};
+  impact: {token_delta: number; latency_delta_seconds: number; evaluated_samples: number};
+  funnel: Array<{stage: string; count: number}>;
+}
+
+export interface EvolutionReviewSummary {
+  review_id: string; run_id: string; goal: string; workflow_mode: string; source_mode: string;
+  run_status: string; status: string; stage: string; decision?: string | null;
+  skill_name?: string | null; critic_decision?: string | null; validation_passed?: boolean | null;
+  candidate_id?: string | null; retry_count: number; revision_count: number;
+  error_message?: string | null; created_at: string; updated_at: string;
+}
+
+export interface EvolutionTimelineEntry {
+  id: string; event_type: string; stage?: string | null; payload: Record<string, unknown>; created_at: string;
+}
+
+export interface EvolutionReviewDetail extends Record<string, unknown> {
+  review_id: string; run_id: string; status: string; goal: string; retry_count: number; revision_count: number;
+  review_pack: Record<string, unknown>; proposal: Record<string, unknown>; critic: Record<string, unknown>;
+  validation: Record<string, unknown>; timeline: EvolutionTimelineEntry[];
+  run?: Record<string, unknown> | null; candidate?: Record<string, unknown> | null;
+  evaluation?: Record<string, unknown> | null; version?: Record<string, unknown> | null;
+  deployments: Array<Record<string, unknown>>;
 }
 
 export class ApiError extends Error {

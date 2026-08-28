@@ -333,8 +333,14 @@ class LearningReviewRepository:
                      review_pack: dict | None = None, proposal: dict | None = None,
                      critic: dict | None = None, validation: dict | None = None,
                      candidate_id: str | None = None, error_message: str | None = None,
-                     retry_count: int | None = None, revision_count: int | None = None) -> bool:
+                     retry_count: int | None = None, revision_count: int | None = None,
+                     reset_outputs: bool = False) -> bool:
         values: dict[str, Any] = {"status": status, "updated_at": utc_now_iso()}
+        if reset_outputs:
+            values.update({
+                "review_pack_json": None, "proposal_json": None, "critic_json": None,
+                "validation_json": None, "candidate_id": None, "completed_at": None,
+            })
         if checkpoint is not None: values["checkpoint_json"] = json_text(checkpoint)
         if review_pack is not None: values["review_pack_json"] = json_text(review_pack)
         if proposal is not None: values["proposal_json"] = json_text(proposal)

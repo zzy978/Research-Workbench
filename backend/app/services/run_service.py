@@ -204,6 +204,11 @@ class RunService:
                 budget=settings.HARNESS_BUDGETS,
             ),
         )
+        await self.runs.update_model_snapshot(run.run_id, {
+            "llm_model": settings.OPENAI_LLM_MODEL,
+            "learning_review_model": settings.LEARNING_REVIEW_MODEL,
+            "evaluation_arm": "treatment" if forced_skill else "control",
+        })
         await self._execute(run.run_id)
         finished = await self.runs.get(run.run_id)
         checks = await ContractRepository(self.database).list_for_run(run.run_id)
