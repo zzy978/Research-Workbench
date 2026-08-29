@@ -4,7 +4,6 @@ import re
 from typing import Any, Dict
 
 _CODE_BLOCK_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
-_JSON_CANDIDATE_RE = re.compile(r"{.*}", re.DOTALL)
 
 
 def extract_json_text(text: str) -> str:
@@ -28,11 +27,32 @@ def extract_json_text(text: str) -> str:
 
 def parse_json_text(text: str) -> Dict[str, Any]:
     """将模型输出解析为 JSON 对象，解析失败时抛出 ValueError。"""
-    candidate = extract_json_text(text)
+    cleaned = text.strip()
+    if not cleaned:
+        raise ValueError("空响应，无法解析JSON")
+
+    candidates = [match.group(1).strip() for match in _CODE_BLOCK_RE.finditer(cleaned)]
+    candidates.append(cleaned)
+    decoder = json.JSONDecoder()
+
+    # 模型可能在主 JSON 前后输出思考文本、示例或第二个对象。逐个扫描
+    # 完整对象，避免使用首个“{”到末个“}”的贪婪切片把它们拼在一起。
+    for candidate in candidates:
+        for match in re.finditer(r"{", candidate):
+            try:
+                parsed, _ = decoder.raw_decode(candidate[match.start() :])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+
     try:
-        return json.loads(candidate)
-    except json.JSONDecodeError as exc:
+        parsed = json.loads(extract_json_text(cleaned))
+    except (json.JSONDecodeError, ValueError) as exc:
         raise ValueError("无法解析JSON结构") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("JSON顶层结构必须是对象")
+    return parsed
 
 
 __all__ = ["extract_json_text", "parse_json_text"]

@@ -86,7 +86,8 @@ class TaskDecomposer:
 
     def _invoke_llm(self, prompt: str) -> str:
         """调用LLM得到纯文本输出"""
-        message: BaseMessage = self._llm.invoke(prompt)  # type: ignore[assignment]
+        structured_llm = self._llm.bind(response_format={"type": "json_object"})
+        message: BaseMessage = structured_llm.invoke(prompt)  # type: ignore[assignment]
         content = getattr(message, "content", None) or str(message)
         return content.strip()
 

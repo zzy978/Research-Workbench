@@ -163,7 +163,11 @@ class SkillLearningService:
             if critic.decision == "revise":
                 revision_count = 1
                 await self.repository.update(review_id, status="revising", critic=critic.model_dump(mode="json"), revision_count=1, checkpoint={"stage": "revising"})
-                proposal = await self.proposer.propose(pack, revision_instructions=critic.revision_instructions)
+                proposal = await self.proposer.propose(
+                    pack,
+                    revision_instructions=critic.revision_instructions,
+                    previous_proposal=proposal,
+                )
                 await self._publish(job.run_id, "skill.proposal.revised", {
                     "review_id": review_id, "revision": 1,
                     "instructions": critic.revision_instructions,

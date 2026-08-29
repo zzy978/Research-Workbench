@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class DecisionCard(BaseModel):
@@ -74,6 +74,29 @@ class SkillProposal(BaseModel):
     machine_policy: dict[str, Any] = Field(default_factory=dict)
     support_files: list[dict[str, Any]] = Field(default_factory=list)
     trace_refs: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def require_actionable_candidate(self):
+        if self.decision == "ignore":
+            return self
+        missing: list[str] = []
+        if not self.trace_refs:
+            missing.append("trace_refs")
+        if len(self.rules) < 3:
+            missing.append("rules>=3")
+        if not self.anti_patterns:
+            missing.append("anti_patterns")
+        if not self.stop_conditions:
+            missing.append("stop_conditions")
+        if not self.verification:
+            missing.append("verification")
+        if self.decision == "create" and not (self.name and self.proposed_version):
+            missing.append("create name/version")
+        if self.decision == "patch" and not (self.target_skill_id and self.base_version and self.base_content_hash and self.proposed_version):
+            missing.append("patch target/base/hash/version")
+        if missing:
+            raise ValueError(f"可执行 Skill 提案字段不完整: {', '.join(missing)}")
+        return self
 
 
 class CriticReview(BaseModel):

@@ -5,6 +5,7 @@ import pytest_asyncio
 
 from backend.app.schemas import MessageCreate, RunCreate, SessionCreate
 from deepresearch_agent.evolution import PromotionPolicy, SkillEvaluator, SkillLearningService, SkillRegistry, SkillSpec
+from deepresearch_agent.evolution.review_agents import _normalize_skill_proposal
 from deepresearch_agent.evolution.review_schema import ReviewPack, SkillProposal
 from deepresearch_agent.evolution.validators import ProposalValidators
 from deepresearch_agent.harness import SourceMode, WorkflowMode
@@ -144,6 +145,30 @@ def test_validator_blocks_permission_expansion():
     )
     result = ProposalValidators().validate(pack, proposal)
     assert not result.passed and any("扩大" in item for item in result.errors)
+
+
+def test_actionable_proposal_rejects_empty_create_payload():
+    with pytest.raises(ValueError, match="字段不完整"):
+        SkillProposal(decision="create")
+
+
+def test_proposer_normalizes_rich_rule_and_scalar_shapes():
+    payload = _normalize_skill_proposal({
+        "decision": "create", "name": "safe-web-review", "proposed_version": "0.1.0",
+        "applicability": "official-source research", "rules": [
+            {"rule": "cap retrieval", "trace_refs": ["run:r"]},
+            {"rule": "filter sources", "trace_refs": ["evidence:e"]},
+            {"rule": "cite claims", "trace_refs": ["contract:c"]},
+        ],
+        "anti_patterns": "unbounded search", "stop_conditions": "budget exhausted",
+        "verification": "check citations", "limitations": "web only",
+        "machine_policy": "do not expand tools",
+    })
+
+    proposal = SkillProposal.model_validate(payload)
+    assert proposal.rules == ["cap retrieval", "filter sources", "cite claims"]
+    assert proposal.trace_refs == ["run:r", "evidence:e", "contract:c"]
+    assert proposal.verification == ["check citations"]
 
 
 def test_validator_accepts_contract_trace_and_strips_orchestrator_label():
