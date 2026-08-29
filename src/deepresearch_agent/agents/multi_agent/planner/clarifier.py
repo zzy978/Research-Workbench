@@ -91,7 +91,10 @@ class Clarifier:
 
     def _invoke_llm(self, prompt: str) -> str:
         """调用LLM并提取文本内容"""
-        structured_llm = self._llm.bind(response_format={"type": "json_object"})
+        structured_llm = self._llm.bind(
+            response_format={"type": "json_object"},
+            extra_body={"enable_thinking": False},
+        )
         message: BaseMessage = structured_llm.invoke(prompt)  # type: ignore[assignment]
         content = getattr(message, "content", None) or str(message)
         return content.strip()
