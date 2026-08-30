@@ -175,7 +175,7 @@ class RunService:
                     agent.close()
             run = await self.runs.get(run_id)
             config = json.loads(run.config_snapshot_json or "{}") if run else {}
-            if not config.get("evaluation_run"):
+            if not config.get("evaluation_run") and run and run.status not in {"paused", "pausing"}:
                 await self.skill_learning.enqueue_for_run(run_id)
                 snapshot = json.loads(run.model_snapshot_json or "{}") if run else {}
                 selected = snapshot.get("skill") if isinstance(snapshot, dict) else None
@@ -254,14 +254,51 @@ class RunService:
                 await self.event_bus.publish(run_id, "run.cancelled", stage="cancelled", payload={"status": "cancelled"})
         return True
 
+    async def pause(self, run_id: str) -> bool:
+        requested = await self.runs.request_pause(run_id)
+        if not requested:
+            return False
+        await self.event_bus.publish(
+            run_id, "run.pause_requested", stage="pausing", payload={"status": "pausing"},
+        )
+        task = self._tasks.get(run_id)
+        if task is None or task.done():
+            if await self.runs.finalize_pause(run_id):
+                run = await self.runs.get(run_id)
+                await self.event_bus.publish(
+                    run_id, "run.paused", stage="paused",
+                    payload={"status": "paused", "resume_from_status": run.current_stage if run else "queued"},
+                )
+        return True
+
     async def resume(self, run_id: str, *, clarification: str | None = None) -> bool:
+        before = await self.runs.get(run_id)
+        pending_pause = bool(
+            before and json.loads(before.config_snapshot_json or "{}").get("pause_requested")
+        )
+        cancelling_pending_pause = bool(
+            pending_pause and before and before.status != "paused"
+        )
         resumed = await self.runs.resume(run_id, clarification=clarification)
         if resumed:
+            current = await self.runs.get(run_id)
             await self.event_bus.publish(
                 run_id, "run.clarification_received" if clarification else "run.resume_requested",
-                stage="queued", payload={"has_clarification": bool(clarification)},
+                stage=current.current_stage if current else "queued",
+                payload={
+                    "has_clarification": bool(clarification),
+                    "status": current.status if current else "queued",
+                    "cancelled_pending_pause": cancelling_pending_pause,
+                },
             )
-            self.schedule(run_id)
+            if cancelling_pending_pause:
+                return True
+            active = self._tasks.get(run_id)
+            if active is not None and not active.done():
+                loop = asyncio.get_running_loop()
+                active.add_done_callback(lambda _task: loop.call_soon(self.schedule, run_id))
+            else:
+                self.schedule(run_id)
         return resumed
 
     async def shutdown(self) -> None:

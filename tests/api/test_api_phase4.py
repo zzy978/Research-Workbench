@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.main import create_app
+from backend.app.services.chat_service import is_resume_intent
 from backend.app.schemas import MessageCreate, RunCreate, SessionCreate
 from deepresearch_agent.agents.multi_agent.core.execution_record import ExecutionMetadata, ExecutionRecord, ToolCall
 from deepresearch_agent.agents.multi_agent.core.retrieval_result import RetrievalMetadata, RetrievalResult
@@ -211,6 +212,69 @@ def test_cancel_queued_run(client):
     cancelled = client.get(f"/api/v1/runs/{run_id}").json()
     assert cancelled["cancellation_requested"] is True
     assert cancelled["status"] == "cancelled"
+
+
+def test_pause_and_natural_language_resume_keep_same_run(client):
+    client.app.state.run_service.schedule = lambda _run_id: None
+    session_id = new_session(client)
+    run_id = send(client, session_id).json()["run_id"]
+
+    paused = client.post(f"/api/v1/runs/{run_id}/pause")
+    assert paused.status_code == 200 and paused.json()["status"] == "pausing"
+    assert client.get(f"/api/v1/runs/{run_id}").json()["status"] == "paused"
+
+    resumed = client.post(f"/api/v1/sessions/{session_id}/messages", json={
+        "client_message_id": str(uuid.uuid4()),
+        "content": "按刚才的计划接着做吧",
+        "source_mode": "graphrag",
+        "workflow_mode": "deep_research",
+    })
+    assert resumed.status_code == 202
+    assert resumed.json()["run_id"] == run_id
+    assert resumed.json()["created"] is False
+    detail = client.get(f"/api/v1/sessions/{session_id}").json()
+    assert len(detail["runs"]) == 1
+    assert detail["messages"][-1]["run_id"] == run_id
+
+
+def test_natural_language_resume_can_cancel_pending_pause(client):
+    client.app.state.run_service.schedule = lambda _run_id: None
+    session_id = new_session(client)
+    run_id = send(client, session_id).json()["run_id"]
+
+    async def mark_pausing():
+        repository = RunRepository(client.app.state.database)
+        requested = await repository.request_pause(run_id)
+        # Reproduce a real stage finishing after the pause request. The
+        # transition must advance current_stage without hiding `pausing`.
+        await repository.update_status(run_id, status="planning", current_stage="planning")
+        return requested
+
+    assert client.portal.call(mark_pausing)
+    pending = client.get(f"/api/v1/runs/{run_id}").json()
+    assert pending["status"] == "pausing"
+    assert pending["current_stage"] == "planning"
+    assert pending["pause_requested"] is True
+    resumed = client.post(f"/api/v1/sessions/{session_id}/messages", json={
+        "client_message_id": str(uuid.uuid4()),
+        "content": "继续执行",
+        "source_mode": "graphrag",
+        "workflow_mode": "deep_research",
+    })
+    assert resumed.status_code == 202
+    assert resumed.json()["run_id"] == run_id
+    current = client.get(f"/api/v1/runs/{run_id}").json()
+    assert current["status"] == "planning"
+    assert current["pause_requested"] is False
+    assert current["cancellation_requested"] is False
+
+
+def test_resume_intent_rejects_cancel_or_changed_task_language():
+    assert is_resume_intent("继续")
+    assert is_resume_intent("按之前的计划执行")
+    assert is_resume_intent("go on")
+    assert not is_resume_intent("不要继续")
+    assert not is_resume_intent("改为另一个主题继续研究")
 
 
 def test_clarification_resumes_same_run(client):

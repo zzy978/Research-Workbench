@@ -367,6 +367,39 @@ async def test_runtime_happy_path_persists_events_checkpoints_contract_and_messa
 
 
 @pytest.mark.asyncio
+async def test_pause_after_planning_resumes_same_run_without_replanning(database, tmp_path):
+    FakeDriver.plan_calls = 0
+    FakeDriver.execute_calls = 0
+    _, run = await create_run(database)
+
+    class PauseAfterPlanDriver(FakeDriver):
+        async def plan(self, failures=None):
+            await super().plan(failures)
+            await RunRepository(database).request_pause(self.context.run_id)
+
+    first = await build_runtime(
+        database, tmp_path, lambda ctx, events=None: PauseAfterPlanDriver(ctx),
+    ).execute_run(run.run_id)
+    assert first.status is RunStatus.PAUSED
+    assert first.resume_from_status is RunStatus.EXECUTING
+    stored_paused = await RunRepository(database).get(run.run_id)
+    assert json.loads(stored_paused.config_snapshot_json)["pause_requested"] is False
+    assert PauseAfterPlanDriver.plan_calls == 1
+    assert PauseAfterPlanDriver.execute_calls == 0
+
+    assert await RunRepository(database).resume(run.run_id)
+    second = await build_runtime(
+        database, tmp_path, lambda ctx, events=None: PauseAfterPlanDriver(ctx),
+    ).execute_run(run.run_id)
+    assert second.status is RunStatus.COMPLETED
+    assert PauseAfterPlanDriver.plan_calls == 1
+    assert PauseAfterPlanDriver.execute_calls == 1
+    events = await EventRepository(database).list_after(run.run_id)
+    assert [event.event_type for event in events].count("run.paused") == 1
+    assert [event.event_type for event in events].count("run.resumed") == 1
+
+
+@pytest.mark.asyncio
 async def test_citation_failure_is_locally_repaired_with_bounded_retry(database, tmp_path):
     _, run = await create_run(database)
     result = await build_runtime(database, tmp_path, lambda ctx, events=None: FakeDriver(ctx, dangling=True)).execute_run(run.run_id)

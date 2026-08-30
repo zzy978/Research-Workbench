@@ -14,18 +14,23 @@ class InvalidTransition(ValueError):
 @dataclass(frozen=True)
 class StateMachine:
     transitions = {
-        RunStatus.QUEUED: {RunStatus.CONTEXT_BUILDING, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED},
-        RunStatus.CONTEXT_BUILDING: {RunStatus.PLANNING, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
-        RunStatus.PLANNING: {RunStatus.EXECUTING, RunStatus.NEEDS_USER_INPUT, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
-        RunStatus.EXECUTING: {RunStatus.EXECUTING, RunStatus.RETRYING, RunStatus.REPLANNING, RunStatus.REPORTING, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
-        RunStatus.RETRYING: {RunStatus.EXECUTING, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
-        RunStatus.REPORTING: {RunStatus.VERIFYING, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
-        RunStatus.VERIFYING: {RunStatus.COMPLETED, RunStatus.REPLANNING, RunStatus.REPORTING, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
-        RunStatus.REPLANNING: {RunStatus.EXECUTING, RunStatus.NEEDS_USER_INPUT, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
+        RunStatus.QUEUED: {RunStatus.CONTEXT_BUILDING, RunStatus.PAUSED, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED},
+        RunStatus.CONTEXT_BUILDING: {RunStatus.PLANNING, RunStatus.PAUSED, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
+        RunStatus.PLANNING: {RunStatus.EXECUTING, RunStatus.PAUSED, RunStatus.NEEDS_USER_INPUT, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
+        RunStatus.EXECUTING: {RunStatus.EXECUTING, RunStatus.RETRYING, RunStatus.REPLANNING, RunStatus.REPORTING, RunStatus.PAUSED, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
+        RunStatus.RETRYING: {RunStatus.EXECUTING, RunStatus.PAUSED, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
+        RunStatus.REPORTING: {RunStatus.VERIFYING, RunStatus.PAUSED, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
+        RunStatus.VERIFYING: {RunStatus.COMPLETED, RunStatus.REPLANNING, RunStatus.REPORTING, RunStatus.PAUSED, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
+        RunStatus.REPLANNING: {RunStatus.EXECUTING, RunStatus.PAUSED, RunStatus.NEEDS_USER_INPUT, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
         RunStatus.CANCELLING: {RunStatus.CANCELLED},
         RunStatus.INTERRUPTED: {
             RunStatus.QUEUED, RunStatus.PLANNING, RunStatus.EXECUTING,
             RunStatus.REPORTING, RunStatus.VERIFYING, RunStatus.FAILED,
+        },
+        RunStatus.PAUSED: {
+            RunStatus.QUEUED, RunStatus.CONTEXT_BUILDING, RunStatus.PLANNING,
+            RunStatus.EXECUTING, RunStatus.REPORTING, RunStatus.VERIFYING,
+            RunStatus.RETRYING, RunStatus.REPLANNING, RunStatus.CANCELLING,
         },
         RunStatus.NEEDS_USER_INPUT: {RunStatus.QUEUED, RunStatus.CANCELLING, RunStatus.FAILED},
     }

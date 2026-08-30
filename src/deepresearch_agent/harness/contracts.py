@@ -32,6 +32,7 @@ class RunStatus(str, Enum):
     VERIFYING = "verifying"
     RETRYING = "retrying"
     REPLANNING = "replanning"
+    PAUSED = "paused"
     CANCELLING = "cancelling"
     CANCELLED = "cancelled"
     COMPLETED = "completed"

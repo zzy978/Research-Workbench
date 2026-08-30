@@ -180,7 +180,10 @@ button { cursor: pointer; }
 .composer textarea { width: 100%; resize: none; border: 0; outline: 0; padding: 11px 7px 8px; color: var(--text-primary); background: transparent; font-size: var(--text-lg); line-height: 1.5; }
 .composer textarea::placeholder { color: var(--text-faint); }
 .composer-actions { display: flex; align-items: center; justify-content: space-between; color: var(--text-faint); font-size: 9px; font-family: var(--font-mono); }
-.send, .composer-actions .stop, .clarification-card button { border: 0; border-radius: var(--radius-sm); padding: 9px 15px; color: var(--text-inverse); background: var(--accent); font-size: var(--text-sm); font-weight: 500; transition: background var(--dur-fast) var(--ease-out), transform var(--dur-fast); }
+.send, .composer-actions .stop, .composer-actions .pause, .composer-actions .resume, .clarification-card button { border: 0; border-radius: var(--radius-sm); padding: 9px 15px; color: var(--text-inverse); background: var(--accent); font-size: var(--text-sm); font-weight: 500; transition: background var(--dur-fast) var(--ease-out), transform var(--dur-fast); }
+.composer-control-actions { display: flex; align-items: center; gap: 8px; }
+.composer-actions .pause { color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-border); }
+.composer-actions .resume { background: var(--accent); }
 .send:hover { background: var(--accent-strong); }
 .send:disabled { opacity: 0.45; cursor: not-allowed; }
 .composer-actions .stop { background: var(--danger); }
@@ -412,6 +415,7 @@ button { cursor: pointer; }
 .stage-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); display: flex; flex-direction: column; overflow: hidden; cursor: grab; transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast); }
 .stage-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-md); }
 .stage-card.is-busy { border-color: var(--accent-border); box-shadow: 0 0 0 1px var(--accent-border), var(--shadow-md); }
+.stage-card.is-paused { border-color: var(--line-strong); box-shadow: 0 0 0 1px var(--line-strong), var(--shadow-md); }
 .stage-card.is-error { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger), var(--shadow-sm); }
 .stage-card.is-cancelled { border-color: var(--border-strong); box-shadow: var(--shadow-sm); }
 .stage-card-head { display: flex; align-items: center; gap: 9px; padding: 13px 15px 9px; }
@@ -419,6 +423,7 @@ button { cursor: pointer; }
 .stage-name { font-weight: 600; font-size: 13px; color: var(--text-primary); flex: 1; letter-spacing: 0.01em; }
 .stage-state { font-size: 9px; padding: 2px 9px; border-radius: var(--radius-pill); font-family: var(--font-mono); background: var(--bg-subtle); color: var(--text-tertiary); border: 1px solid var(--border); white-space: nowrap; }
 .stage-card.is-busy .stage-state { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-border); }
+.stage-card.is-paused .stage-state { background: var(--surface-muted); color: var(--text-muted); border-color: var(--line-strong); }
 .stage-card.is-done .stage-state { background: var(--success-soft); color: var(--success); border-color: color-mix(in srgb, var(--success) 30%, var(--surface)); }
 .stage-card.is-error .stage-state { background: var(--danger-soft); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 25%, var(--surface)); }
 .stage-card.is-cancelled .stage-state { background: var(--surface-2); color: var(--muted); border-color: var(--border); }

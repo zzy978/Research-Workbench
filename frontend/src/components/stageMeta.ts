@@ -44,4 +44,4 @@ export function arrivedStages(currentStage?: string | null): string[] {
   return STAGES.slice(0, index + 1).map((s) => s.id);
 }
 
-export type StageState = "pending" | "busy" | "done" | "cancelled" | "error";
+export type StageState = "pending" | "busy" | "paused" | "done" | "cancelled" | "error";

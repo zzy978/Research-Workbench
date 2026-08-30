@@ -26,6 +26,8 @@ export const api = {
     request<{message_id: string; run_id: string; status: string; events_url: string}>(`/sessions/${sessionId}/messages`, { method: "POST", body: JSON.stringify(payload) }),
   run: (id: string) => request<Run>(`/runs/${id}`),
   cancel: (id: string) => request(`/runs/${id}/cancel`, { method: "POST" }),
+  pause: (id: string) => request(`/runs/${id}/pause`, { method: "POST" }),
+  resume: (id: string) => request(`/runs/${id}/resume`, { method: "POST" }),
   clarify: (id: string, content: string) => request(`/runs/${id}/clarifications`, { method: "POST", body: JSON.stringify({ content }) }),
   evidence: (id: string) => request<{items: Evidence[]; total: number}>(`/runs/${id}/evidence`),
   report: (id: string) => request<Report>(`/runs/${id}/report`),

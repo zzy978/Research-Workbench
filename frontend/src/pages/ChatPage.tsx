@@ -17,7 +17,7 @@ import { useStagePositions } from "../hooks/useStagePositions";
 import { useRunEvents } from "../hooks/useRunEvents";
 import { Evidence, Run, SourceMode, WorkflowMode } from "../types/api";
 
-const TERMINAL = ["completed", "failed", "cancelled", "budget_exhausted"];
+const TERMINAL = ["completed", "failed", "cancelled", "budget_exhausted", "paused"];
 const ERROR_STATUS = ["failed", "budget_exhausted", "interrupted"];
 /** 终态/回退阶段（本身不是画板卡片，需回溯到最后一个真实阶段） */
 const NON_CARD_STAGES = ["failed", "cancelled", "budget_exhausted", "interrupted", "retrying", "replanning"];
@@ -45,6 +45,7 @@ function stageStateOf(id: string, currentStage: string | null | undefined, statu
   if (idIndex < currentIndex) return "done";
   if (idIndex === currentIndex) {
     if (status === "cancelled") return "cancelled";
+    if (status === "paused") return "paused";
     return ERROR_STATUS.includes(status) ? "error" : "busy";
   }
   return "pending";
@@ -87,7 +88,9 @@ function ExecCard({ feed, run }: {feed: StageFeed; run: Run | null}) {
       : "研究执行失败"
     : run?.status === "budget_exhausted"
       ? "研究预算耗尽，执行已停止"
-      : `正在执行计划任务 · ${feed.taskCount}/${feed.planTasks.length || feed.taskStartedCount || 1}`;
+      : run?.status === "paused"
+        ? "执行已暂停，恢复后继续未完成任务"
+        : `正在执行计划任务 · ${feed.taskCount}/${feed.planTasks.length || feed.taskStartedCount || 1}`;
   return <div className="exec-card">
     <div className="iter-rows" ref={listRef}>
       {displayRows.length === 0 && <div className="iter-row is-empty">{isPlanWorkflow ? executionSummary : "等待深度研究迭代开始…"}</div>}
@@ -136,12 +139,14 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
   const [composerCollapsed, setComposerCollapsed] = useState(() => localStorage.getItem("chat.composerCollapsed") === "1");
   const [error, setError] = useState<unknown>(null);
   const [sending, setSending] = useState(false);
-  const [stopping, setStopping] = useState(false);
+  const [pausing, setPausing] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [resuming, setResuming] = useState(false);
   const dragMovedRef = useRef(false);
 
   const capabilities = useQuery({ queryKey: ["capabilities"], queryFn: api.capabilities });
   const detail = useQuery({ queryKey: ["session", sessionId], queryFn: () => api.session(sessionId!), enabled: Boolean(sessionId) });
-  const { events, run, connection, refresh } = useRunEvents(runId);
+  const { events, run, connection, refresh, restart } = useRunEvents(runId);
   const evidence = useQuery({ queryKey: ["evidence", runId], queryFn: () => api.evidence(runId!), enabled: Boolean(runId), refetchInterval: run && !TERMINAL.includes(run.status) ? 5000 : false });
   const report = useQuery({ queryKey: ["report", runId], queryFn: () => api.report(runId!), enabled: Boolean(runId), refetchInterval: run && !TERMINAL.includes(run.status) ? 5000 : false });
   const contextInspector = useQuery({ queryKey: ["context", runId], queryFn: () => api.context(runId!), enabled: Boolean(runId), refetchInterval: run && !TERMINAL.includes(run.status) ? 5000 : false });
@@ -151,7 +156,7 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
   useEffect(() => { localStorage.setItem("chat.stripCollapsed", stripCollapsed ? "1" : "0"); }, [stripCollapsed]);
   useEffect(() => { localStorage.setItem("chat.composerCollapsed", composerCollapsed ? "1" : "0"); }, [composerCollapsed]);
   useEffect(() => {
-    setRunId(null); setSelectedEvidence(null); setSelectedStage(null); setStopping(false); setError(null);
+    setRunId(null); setSelectedEvidence(null); setSelectedStage(null); setPausing(false); setCancelling(false); setResuming(false); setError(null);
   }, [sessionId]);
   useEffect(() => {
     if (!detail.data || detail.data.session_id !== sessionId || runId) return;
@@ -161,7 +166,10 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
   useEffect(() => {
     if (!run) return;
     setSource(run.source_mode); setWorkflow(run.workflow_mode);
-  }, [run?.run_id]);
+    if (run.status === "paused" || (!run.pause_requested && run.status !== "pausing")) setPausing(false);
+    if (run.status === "cancelled") setCancelling(false);
+    if (run.status !== "paused" && run.status !== "pausing") setResuming(false);
+  }, [run?.run_id, run?.status, run?.pause_requested]);
   useEffect(() => {
     if (!capabilities.data || capabilities.data.sources[source]?.available) return;
     const fallback = ([capabilities.data.default_source_mode, "graphrag", "web"] as SourceMode[]).find((mode) => capabilities.data!.sources[mode]?.available);
@@ -203,11 +211,15 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
   async function submit(event: FormEvent) {
     event.preventDefault();
     const sourceAvailable = capabilities.data?.sources[source]?.available ?? false;
-    if (!sessionId || !text.trim() || sending || !sourceAvailable || (run && !TERMINAL.includes(run.status))) return;
+    const resumable = run?.status === "paused" || run?.status === "pausing" || Boolean(run?.pause_requested) || pausing;
+    if (!sessionId || !text.trim() || sending || (!sourceAvailable && !resumable) || (run && !TERMINAL.includes(run.status) && !resumable)) return;
     setSending(true); setError(null);
     try {
       const result = await api.send(sessionId, { client_message_id: crypto.randomUUID(), content: text.trim(), source_mode: source, workflow_mode: workflow });
-      setText(""); setRunId(result.run_id); await queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
+      const sameRun = result.run_id === runId;
+      setText(""); setRunId(result.run_id);
+      if (sameRun) restart();
+      await queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
     } catch (caught) { setError(caught); } finally { setSending(false); }
   }
 
@@ -217,11 +229,25 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
     }
   }
 
-  async function stopRun() {
-    if (!run || stopping) return;
-    setStopping(true); setError(null);
+  async function pauseRun() {
+    if (!run || pausing) return;
+    setPausing(true); setError(null);
+    try { await api.pause(run.run_id); await refresh(); }
+    catch (caught) { setError(caught); setPausing(false); }
+  }
+
+  async function cancelRun() {
+    if (!run || cancelling) return;
+    setCancelling(true); setError(null);
     try { await api.cancel(run.run_id); await refresh(); }
-    catch (caught) { setError(caught); setStopping(false); }
+    catch (caught) { setError(caught); setCancelling(false); }
+  }
+
+  async function resumeRun() {
+    if (!run || (!["paused", "pausing"].includes(run.status) && !run.pause_requested && !pausing) || resuming) return;
+    setResuming(true); setError(null);
+    try { await api.resume(run.run_id); restart(); await refresh(); }
+    catch (caught) { setError(caught); setResuming(false); }
   }
 
   function openEvidence(item: Evidence) { setSelectedStage(null); setSelectedEvidence(item); }
@@ -241,7 +267,9 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
       }
       case "executing": return <ExecCard feed={feed} run={run} />;
       case "reporting": return <CardSummary
-        lines={[run?.status === "cancelled"
+        lines={[run?.status === "paused"
+          ? "报告阶段已暂停，恢复后继续"
+          : run?.status === "cancelled"
           ? "任务已取消，未生成报告"
           : run?.status === "reporting" && feed.recovery?.action === "repair_report"
             ? `正在修复报告 · 第 ${feed.recovery.attempt ?? 1}/${feed.recovery.maxAttempts ?? "?"} 次`
@@ -251,7 +279,7 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
       case "verifying": {
         const done = feed.verification.filter((check) => check.passed != null).length;
         const passed = feed.verification.filter((check) => check.passed === true).length;
-        const lines = done > 0 ? [`已核查 ${done} 项 · ${passed} 项通过`] : ["正在逐项验证…"];
+        const lines = run?.status === "paused" ? ["验证阶段已暂停，恢复后继续"] : done > 0 ? [`已核查 ${done} 项 · ${passed} 项通过`] : ["正在逐项验证…"];
         if (feed.verifyFailures.length > 0) {
           if (feed.recovery?.attemptsExhausted && feed.recovery.action === "repair_report") lines.push(`报告自动修复 ${feed.recovery.attempt ?? feed.recovery.maxAttempts ?? 0} 次后仍未通过`);
           else if (feed.recovery?.attemptsExhausted && feed.recovery.action === "replan") lines.push(`重新规划 ${feed.recovery.attempt ?? feed.recovery.maxAttempts ?? 0} 次后仍未通过`);
@@ -279,7 +307,7 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
             {" · "}命中 {formatTokens(cacheStats.data.totals.hit_tokens)} / 未命中 {formatTokens(cacheStats.data.totals.miss_tokens)} · {cacheStats.data.totals.requests} 次
           </span>
         )}
-        <span className={`connection-dot${connection === "reconnecting" ? " reconnecting" : ""}`}>{run && TERMINAL.includes(run.status) ? "已结束" : connection === "reconnecting" ? "重连中" : connection === "connected" ? "实时" : "待连接"}</span>
+        <span className={`connection-dot${connection === "reconnecting" ? " reconnecting" : ""}`}>{run?.status === "paused" ? "已暂停" : run && TERMINAL.includes(run.status) ? "已结束" : connection === "reconnecting" ? "重连中" : connection === "connected" ? "实时" : "待连接"}</span>
         <button type="button" className="whiteboard-button" onClick={() => setWhiteboardOpen(true)}>白板</button>
         <button type="button" className="icon-btn" onClick={() => setStripCollapsed((value) => !value)} title={stripCollapsed ? "展开会话消息" : "折叠会话消息"} aria-label="会话消息">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -325,7 +353,19 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
           <div className="composer-tools"><SourceSelector value={source} onChange={setSource} capabilities={capabilities.data} /><select value={workflow} onChange={(event) => setWorkflow(event.target.value as WorkflowMode)}><option value="deep_research">DeepResearch</option><option value="plan_execute_report">Plan–Execute–Report</option></select></div>
           {source === "web" && capabilities.data?.sources.web.reason && <small className="capability-note">{capabilities.data.sources.web.reason}</small>}
           <textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={onComposerKeyDown} placeholder="提出一个需要证据支持的问题…" rows={3} />
-          <div className="composer-actions"><span>Enter 发送 · Shift+Enter 换行 · 每个 Run 冻结当前来源</span>{run && !TERMINAL.includes(run.status) ? <button type="button" className="stop" disabled={stopping || run.cancellation_requested} onClick={stopRun}>{stopping || run.cancellation_requested ? "正在停止…" : "停止"}</button> : <button className="send" disabled={sending || !text.trim() || !(capabilities.data?.sources[source]?.available ?? false)}>{sending ? "发送中…" : "发送研究 →"}</button>}</div>
+          <div className="composer-actions">
+            <span>{(["paused", "pausing"].includes(run?.status ?? "") || run?.pause_requested || pausing) ? "输入“继续 / 接着做 / 按计划执行”等，或点击恢复" : "Enter 发送 · Shift+Enter 换行 · 每个 Run 冻结当前来源"}</span>
+            <div className="composer-control-actions">
+              {(["paused", "pausing"].includes(run?.status ?? "") || run?.pause_requested || pausing) ? <>
+                <button type="button" className="resume" disabled={resuming} onClick={resumeRun}>{resuming ? "正在恢复…" : run?.status === "paused" ? "恢复运行" : "撤销暂停并继续"}</button>
+                <button className="send" disabled={sending || !text.trim()}>{sending ? "发送中…" : "发送"}</button>
+                <button type="button" className="stop" disabled={cancelling} onClick={cancelRun}>{cancelling ? "正在取消…" : "取消"}</button>
+              </> : run && !TERMINAL.includes(run.status) ? <>
+                <button type="button" className="pause" disabled={pausing || run.status === "pausing"} onClick={pauseRun}>{pausing || run.status === "pausing" ? "正在暂停…" : "暂停"}</button>
+                <button type="button" className="stop" disabled={cancelling || run.cancellation_requested} onClick={cancelRun}>{cancelling || run.cancellation_requested ? "正在取消…" : "取消"}</button>
+              </> : <button className="send" disabled={sending || !text.trim() || !(capabilities.data?.sources[source]?.available ?? false)}>{sending ? "发送中…" : "发送研究 →"}</button>}
+            </div>
+          </div>
         </motion.form>
       )}
     </AnimatePresence>

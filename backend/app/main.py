@@ -16,7 +16,7 @@ from backend.app.services import ChatService, EventStreamService, RunService
 from deepresearch_agent.config import settings
 from deepresearch_agent.harness.errors import AppError, ErrorCode
 from deepresearch_agent.persistence import Database
-from deepresearch_agent.persistence.repositories import RunRepository, SessionRepository
+from deepresearch_agent.persistence.repositories import MessageRepository, RunRepository, SessionRepository
 from deepresearch_agent.memory import MemoryService
 from deepresearch_agent.persistence.repositories import AuditRepository, MemoryRepository
 from deepresearch_agent.persistence.repositories import LearningReviewRepository, SkillRepository
@@ -51,7 +51,9 @@ def create_app(
     app = FastAPI(title="DeepResearch HybridRAG Local MVP", version="0.4.0", lifespan=lifespan)
     app.state.database = database
     app.state.run_service = run_service
-    app.state.chat_service = ChatService(SessionRepository(database), RunRepository(database), run_service)
+    app.state.chat_service = ChatService(
+        SessionRepository(database), RunRepository(database), MessageRepository(database), run_service,
+    )
     app.state.event_stream = EventStreamService(run_service.events, run_service.runs, run_service.event_bus)
     app.state.memory_service = MemoryService(
         MemoryRepository(database), AuditRepository(database),

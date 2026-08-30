@@ -412,8 +412,9 @@ python scripts/evaluate_runs.py --labels evals/system/cases.json --retrieval-k 1
 | GET | /api/v1/runs/{id}/events | Durable SSE 事件流 |
 | GET | /api/v1/runs/{id}/evidence | Evidence Ledger |
 | GET | /api/v1/runs/{id}/report | 报告与 Contract 结果 |
+| POST | /api/v1/runs/{id}/pause | 在安全阶段边界暂停并保存 Checkpoint |
 | POST | /api/v1/runs/{id}/cancel | 取消任务 |
-| POST | /api/v1/runs/{id}/resume | 恢复任务 |
+| POST | /api/v1/runs/{id}/resume | 从 Checkpoint 恢复同一 Run |
 | GET/PATCH | /api/v1/memories | Curated Memory 管理 |
 | GET/POST | /api/v1/skills | Skill 查看、评测、启用与回滚 |
 | GET | /api/v1/evaluations/runs/{run_id} | 单 Run 评测 |

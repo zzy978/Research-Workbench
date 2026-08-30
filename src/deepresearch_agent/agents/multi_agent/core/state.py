@@ -28,7 +28,7 @@ class PlanContext(BaseModel):
     refined_query: Optional[str] = Field(default=None, description="经过澄清和重写后的查询")
 
     # 澄清历史记录（问题-回答对）
-    clarification_history: List[Dict[str, str]] = Field(
+    clarification_history: List[Dict[str, Optional[str]]] = Field(
         default_factory=list,
         description="澄清问答历史，格式: [{'question': '...', 'answer': '...'}]"
     )

@@ -92,7 +92,7 @@ class HarnessRuntime:
         set_current_run(run_id)
         try:
             context = await self._load_context(run_id)
-            if context.status is RunStatus.INTERRUPTED:
+            if context.status in {RunStatus.INTERRUPTED, RunStatus.PAUSED}:
                 resume_target = context.resume_from_status or RunStatus.QUEUED
                 context.resume_from_status = None
                 await self._transition(context, resume_target, event_type="run.resumed")
@@ -151,6 +151,8 @@ class HarnessRuntime:
                 await self._save_report_artifact(context)
 
             while not self.state_machine.is_terminal(context.status):
+                if await self._pause_at_safe_boundary(context):
+                    return context
                 await self._assert_not_cancelled(context)
                 budget.assert_available()
 
@@ -447,11 +449,13 @@ class HarnessRuntime:
             raise ValueError(f"Run 不存在: {run_id}")
         restored = await self.checkpoints.restore(run_id)
         if restored is not None:
-            persisted_status = RunStatus(run.status)
+            persisted_status = None if run.status == "pausing" else RunStatus(run.status)
             if persisted_status is RunStatus.INTERRUPTED:
                 restored.resume_from_status = self._safe_stage_after(restored.status)
                 restored.status = RunStatus.INTERRUPTED
-            else:
+            elif persisted_status is RunStatus.PAUSED:
+                restored.status = RunStatus.PAUSED
+            elif persisted_status is not None:
                 restored.status = persisted_status
             restored.cancellation_requested = bool(run.cancellation_requested)
             restored.config_snapshot.update(json.loads(run.config_snapshot_json or "{}"))
@@ -460,13 +464,21 @@ class HarnessRuntime:
         if message is None:
             raise ValueError(f"Run {run_id} 的触发消息不存在")
         limits = json.loads(run.budget_json or "{}") or {}
+        config_snapshot = json.loads(run.config_snapshot_json or "{}")
         return RunContext(
             run_id=run.run_id, session_id=run.session_id, trigger_message_id=run.trigger_message_id,
             source_mode=SourceMode(run.source_mode), workflow_mode=WorkflowMode(run.workflow_mode),
-            status=RunStatus(run.status), original_query=message.content,
-            config_snapshot=json.loads(run.config_snapshot_json or "{}"),
+            status=(
+                RunStatus(run.current_stage or "queued")
+                if run.status == "pausing" else RunStatus(run.status)
+            ), original_query=message.content,
+            config_snapshot=config_snapshot,
             model_snapshot=json.loads(run.model_snapshot_json or "{}"),
             budget_limits=BudgetLimits.model_validate(limits),
+            resume_from_status=(
+                RunStatus(config_snapshot.get("pause_resume_status", "queued"))
+                if run.status == "paused" else None
+            ),
         )
 
     @staticmethod
@@ -495,9 +507,29 @@ class HarnessRuntime:
         self.state_machine.validate(context.status, target)
         context.status = target
         self._attach_prefix_usage(context)
-        await self.runs.update_status(context.run_id, status=target.value, current_stage=target.value, error_code=error_code, error_message=error_message, usage={"limits": context.budget_limits.model_dump(), "usage": context.budget_usage.model_dump()})
+        current_stage = (
+            context.resume_from_status.value
+            if target is RunStatus.PAUSED and context.resume_from_status is not None
+            else target.value
+        )
+        await self.runs.update_status(context.run_id, status=target.value, current_stage=current_stage, error_code=error_code, error_message=error_message, usage={"limits": context.budget_limits.model_dump(), "usage": context.budget_usage.model_dump()})
         event_payload = {"status": target.value, "error_code": error_code, **(payload or {})}
+        if target is RunStatus.PAUSED:
+            event_payload["resume_from_status"] = current_stage
         await self.events.publish(context.run_id, event_type or "run.stage_changed", stage=target.value, payload=event_payload)
+
+    async def _pause_at_safe_boundary(self, context: RunContext) -> bool:
+        run = await self.runs.get(context.run_id)
+        pause_requested = bool(
+            run and json.loads(run.config_snapshot_json or "{}").get("pause_requested")
+        )
+        if run is None or (run.status != "pausing" and not pause_requested):
+            return False
+        context.resume_from_status = context.status
+        await self._transition(context, RunStatus.PAUSED, event_type="run.paused")
+        await self.checkpoints.save(context, "paused")
+        await self.runs.clear_pause_request(context.run_id)
+        return True
 
     async def _assert_not_cancelled(self, context: RunContext) -> None:
         run = await self.runs.get(context.run_id)

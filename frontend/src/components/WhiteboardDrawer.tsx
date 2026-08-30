@@ -4,6 +4,7 @@ import { WhiteboardEntry } from "../types/api";
 
 const EVENT_LABELS: Record<string, string> = {
   "run.queued": "Run 已入队", "run.started": "Run 开始", "run.stage_changed": "阶段切换",
+  "run.pause_requested": "请求暂停", "run.paused": "Run 已暂停", "run.resumed": "Run 已恢复",
   "context.completed": "上下文完成", "plan.created": "计划创建", "plan.revised": "计划更新",
   "task.started": "任务开始", "task.completed": "任务完成", "task.failed": "任务失败",
   "tool.completed": "工具实时返回", "tool.failed": "工具失败", "evidence.added": "证据入账",

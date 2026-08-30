@@ -130,6 +130,15 @@ class MessageRepository:
         async with self.database.sessions() as session:
             return await session.get(MessageModel, message_id)
 
+    async def get_by_client_id(self, session_id: str, client_message_id: str) -> Optional[MessageModel]:
+        async with self.database.sessions() as session:
+            return (await session.execute(
+                select(MessageModel).where(
+                    MessageModel.session_id == session_id,
+                    MessageModel.client_message_id == client_message_id,
+                )
+            )).scalar_one_or_none()
+
     async def list_for_session(self, session_id: str, *, limit: int = 100, offset: int = 0) -> list[MessageModel]:
         async with self.database.sessions() as session:
             result = await session.execute(select(MessageModel).where(MessageModel.session_id == session_id).order_by(MessageModel.created_at).limit(max(1, min(limit, 500))).offset(max(0, offset)))
@@ -158,7 +167,7 @@ class MessageRepository:
 
 
 class RunRepository:
-    ACTIVE_STATUSES = ("queued", "context_building", "planning", "executing", "reporting", "verifying", "retrying", "replanning", "cancelling")
+    ACTIVE_STATUSES = ("queued", "context_building", "planning", "executing", "reporting", "verifying", "retrying", "replanning", "pausing", "cancelling")
 
     def __init__(self, database: Database):
         self.database = database
@@ -220,6 +229,18 @@ class RunRepository:
         if status in {"failed", "budget_exhausted", "cancelled"}:
             values["completed_at"] = utc_now_iso()
         async with self.database.transaction() as session:
+            run = await session.get(RunModel, run_id)
+            if run is None:
+                return False
+            pause_requested = bool(json.loads(run.config_snapshot_json or "{}").get("pause_requested"))
+            if pause_requested and status in {
+                "queued", "context_building", "planning", "executing",
+                "reporting", "verifying", "retrying", "replanning",
+            }:
+                # A stage may finish after the pause request was accepted. Keep
+                # the externally visible control state while still advancing
+                # current_stage to the safe continuation point.
+                values["status"] = "pausing"
             result = await session.execute(update(RunModel).where(RunModel.run_id == run_id).values(**values))
             return result.rowcount == 1
 
@@ -297,15 +318,76 @@ class RunRepository:
 
     async def request_cancel(self, run_id: str) -> bool:
         async with self.database.transaction() as session:
-            result = await session.execute(update(RunModel).where(RunModel.run_id == run_id, RunModel.status.in_(self.ACTIVE_STATUSES)).values(cancellation_requested=1, updated_at=utc_now_iso()))
+            result = await session.execute(update(RunModel).where(RunModel.run_id == run_id, RunModel.status.in_(self.ACTIVE_STATUSES + ("paused",))).values(cancellation_requested=1, updated_at=utc_now_iso()))
             return result.rowcount == 1
+
+    async def request_pause(self, run_id: str) -> bool:
+        """Request a cooperative pause at the next durable stage boundary."""
+        async with self.database.transaction() as session:
+            run = await session.get(RunModel, run_id)
+            allowed = tuple(status for status in self.ACTIVE_STATUSES if status not in {"pausing", "cancelling"})
+            if run is None or run.status not in allowed:
+                return False
+            snapshot = json.loads(run.config_snapshot_json or "{}")
+            snapshot["pause_requested"] = True
+            run.config_snapshot_json = json_text(snapshot)
+            run.status = "pausing"
+            run.updated_at = utc_now_iso()
+            return True
+
+    async def finalize_pause(self, run_id: str) -> bool:
+        """Pause a Run which has no live Runtime task (normally still queued)."""
+        async with self.database.transaction() as session:
+            run = await session.get(RunModel, run_id)
+            if run is None or run.status != "pausing":
+                return False
+            snapshot = json.loads(run.config_snapshot_json or "{}")
+            resume_from = run.current_stage or "queued"
+            if resume_from not in self.ACTIVE_STATUSES:
+                resume_from = "queued"
+            snapshot["pause_resume_status"] = resume_from
+            snapshot["pause_requested"] = False
+            run.status = "paused"
+            run.current_stage = resume_from
+            run.config_snapshot_json = json_text(snapshot)
+            run.updated_at = utc_now_iso()
+            return True
+
+    async def clear_pause_request(self, run_id: str) -> bool:
+        async with self.database.transaction() as session:
+            run = await session.get(RunModel, run_id)
+            if run is None:
+                return False
+            snapshot = json.loads(run.config_snapshot_json or "{}")
+            snapshot["pause_requested"] = False
+            run.config_snapshot_json = json_text(snapshot)
+            run.updated_at = utc_now_iso()
+            return True
+
+    async def latest_paused_for_session(self, session_id: str) -> Optional[RunModel]:
+        """Return the latest Run only when it is paused or waiting to pause."""
+        async with self.database.sessions() as session:
+            latest = (await session.execute(
+                select(RunModel)
+                .where(RunModel.session_id == session_id)
+                .order_by(RunModel.created_at.desc(), RunModel.run_id.desc())
+                .limit(1)
+            )).scalar_one_or_none()
+            if latest is None:
+                return None
+            pause_requested = bool(json.loads(latest.config_snapshot_json or "{}").get("pause_requested"))
+            return latest if latest.status in {"paused", "pausing"} or pause_requested else None
 
     async def resume(self, run_id: str, *, clarification: Optional[str] = None) -> bool:
         async with self.database.transaction() as session:
             run = await session.get(RunModel, run_id)
-            if run is None or run.status not in {"interrupted", "needs_user_input"}:
+            if run is None:
                 return False
             snapshot = json.loads(run.config_snapshot_json or "{}")
+            pending_pause = bool(snapshot.get("pause_requested"))
+            if run.status not in {"interrupted", "needs_user_input", "paused", "pausing"} and not pending_pause:
+                return False
+            snapshot["pause_requested"] = False
             if clarification:
                 entries = list(snapshot.get("clarifications", []))
                 entries.append({"content": clarification, "created_at": utc_now_iso()})
@@ -316,6 +398,11 @@ class RunRepository:
             if run.status == "needs_user_input":
                 run.status = "queued"
                 run.current_stage = "queued"
+            elif run.status == "pausing":
+                # The stage operation is still alive. Cancelling the pending
+                # pause lets that same task continue without scheduling a
+                # second Runtime or waiting for a checkpoint boundary.
+                run.status = run.current_stage or "queued"
             run.cancellation_requested = 0
             run.error_code = None
             run.error_message = None

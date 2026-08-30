@@ -19,12 +19,14 @@ router = APIRouter(prefix="/runs", tags=["runs"])
 
 
 def run_dict(run):
+    config = json.loads(run.config_snapshot_json or "{}")
     return {
         "run_id": run.run_id, "session_id": run.session_id, "trigger_message_id": run.trigger_message_id,
         "source_mode": run.source_mode, "workflow_mode": run.workflow_mode, "status": run.status,
         "current_stage": run.current_stage, "usage": json.loads(run.usage_json or "{}"),
         "error_code": run.error_code, "error_message": run.error_message,
-        "cancellation_requested": bool(run.cancellation_requested), "created_at": run.created_at,
+        "cancellation_requested": bool(run.cancellation_requested),
+        "pause_requested": bool(config.get("pause_requested")), "created_at": run.created_at,
         "started_at": run.started_at, "completed_at": run.completed_at, "updated_at": run.updated_at,
     }
 
@@ -49,12 +51,20 @@ async def cancel_run(run_id: str, database=Depends(get_database), run_service=De
     return RunControl(run_id=run_id, status="cancelling")
 
 
+@router.post("/{run_id}/pause", response_model=RunControl)
+async def pause_run(run_id: str, database=Depends(get_database), run_service=Depends(get_run_service)):
+    await require_run(database, run_id)
+    if not await run_service.pause(run_id):
+        raise AppError(ErrorCode.CONFLICT, "Run 已结束、已暂停或当前不能暂停")
+    return RunControl(run_id=run_id, status="pausing")
+
+
 @router.post("/{run_id}/resume", response_model=RunControl)
 async def resume_run(run_id: str, database=Depends(get_database), run_service=Depends(get_run_service)):
     await require_run(database, run_id)
     if not await run_service.resume(run_id):
         raise AppError(ErrorCode.CONFLICT, "Run 当前不能恢复")
-    return RunControl(run_id=run_id, status="queued")
+    return RunControl(run_id=run_id, status="resuming")
 
 
 @router.post("/{run_id}/clarifications", response_model=RunControl)
