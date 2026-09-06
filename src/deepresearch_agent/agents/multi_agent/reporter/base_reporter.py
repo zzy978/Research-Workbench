@@ -268,8 +268,10 @@ class BaseReporter:
             evidence_fingerprint=evidence_fingerprint,
         )
         final_report = self._assemble_report(outline, section_contents)
-        annex, annex_ids = self._evidence_card_pipeline.annex(evidence_cards)
-        final_report = f"{final_report}\n\n{annex}".strip()
+        # The Evidence Ledger is a durable audit surface, not part of the reading
+        # flow. Keep its exact coverage metadata, but do not dump every card into
+        # the user-facing Markdown report.
+        _, annex_ids = self._evidence_card_pipeline.annex(evidence_cards)
         coverage = self._evidence_card_pipeline.coverage(
             evidence_cards, routing, used_evidence_ids, annex_ids,
         )

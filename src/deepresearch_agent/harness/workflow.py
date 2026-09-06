@@ -250,7 +250,7 @@ class PlanExecuteReportDriver:
         return remaining < REPORT_RESERVED_TOKENS + VERIFICATION_RESERVED_TOKENS
 
     def _build_reserved_budget_report(self) -> ReportResult:
-        """Finish with all evidence, without another model call, when reserves are low."""
+        """Finish without another model call while keeping the report readable."""
         evidence_by_id: dict[str, RetrievalResult] = {}
         for _, _, _, result in self.evidence_results():
             evidence_by_id[result.result_id] = result
@@ -291,17 +291,29 @@ class PlanExecuteReportDriver:
         for section in outline.sections:
             assigned = routing.get(section.section_id, [])
             lines: list[str] = []
+            seen_claims: set[str] = set()
             for evidence_id in assigned:
                 card = cards_by_id[evidence_id]
                 claim = card.claims[0] if card.claims else card.summary
+                claim = self._clean_fallback_claim(claim)
+                fingerprint = re.sub(r"\W+", "", claim).lower()[:160]
+                if not claim or fingerprint in seen_claims:
+                    continue
+                seen_claims.add(fingerprint)
                 lines.append(f"- {claim} [{evidence_id}]")
                 if card.conflict_findings:
-                    lines.append(
-                        f"  - 冲突或不一致：{'；'.join(card.conflict_findings)} [{evidence_id}]"
-                    )
+                    conflict = self._clean_fallback_claim(card.conflict_findings[0])
+                    if conflict:
+                        lines.append(f"  - 冲突或不一致：{conflict} [{evidence_id}]")
                 if card.limitations:
-                    lines.append(f"  - 局限：{'；'.join(card.limitations)} [{evidence_id}]")
-            content = "\n".join(lines) or "当前章节没有被路由到直接相关的 Evidence Card。"
+                    limitation = self._clean_fallback_claim(card.limitations[0])
+                    if limitation:
+                        lines.append(f"  - 局限：{limitation} [{evidence_id}]")
+                if len(seen_claims) >= 4:
+                    break
+            content = "\n".join(lines) or "当前证据不足以形成可靠结论。"
+            if len(assigned) > len(seen_claims):
+                content += f"\n\n本节另有 {len(assigned) - len(seen_claims)} 条证据保存在证据台账中，可在报告的“证据”视图核查。"
             section_contents.append(SectionContent(
                 section_id=section.section_id,
                 title=section.title,
@@ -312,8 +324,8 @@ class PlanExecuteReportDriver:
         report_parts = [f"# {outline.title}", outline.abstract or ""]
         for section, content in zip(outline.sections, section_contents):
             report_parts.extend([f"## {section.title}", content.content])
-        annex, annex_ids = pipeline.annex(cards)
-        report_parts.append(annex)
+        # Full coverage lives in structured metadata and the Evidence Ledger.
+        _, annex_ids = pipeline.annex(cards)
         final_report = "\n\n".join(part for part in report_parts if part).strip()
         coverage = pipeline.coverage(cards, routing, processed_ids, annex_ids)
         return ReportResult(
@@ -338,6 +350,21 @@ class PlanExecuteReportDriver:
                 ),
             },
         )
+
+    @staticmethod
+    def _clean_fallback_claim(value: str, *, limit: int = 360) -> str:
+        """Remove common webpage chrome and Markdown that corrupt report layout."""
+        text = re.sub(r"[`#>*_|]+", " ", str(value or ""))
+        text = re.sub(
+            r"(?i)skip to content|navigation menu|sign in|cookie settings|loading(?:\s+loading)+|"
+            r"documentation index|console\s+log\s+in",
+            " ",
+            text,
+        )
+        text = re.sub(r"\s+", " ", text).strip(" -—:：")
+        if len(text) > limit:
+            text = text[:limit].rstrip() + "…"
+        return text
 
     def _uses_compact_report(self) -> bool:
         plan = self.planner_result.plan_spec if self.planner_result else None
@@ -436,11 +463,6 @@ class PlanExecuteReportDriver:
                     raw_response=None,
                 )
             self.report_result.consistency_check = consistency
-            if self.report_result.evidence_cards:
-                from deepresearch_agent.agents.multi_agent.reporter.evidence_cards import EvidenceCardPipeline, EvidenceCard
-                cards = [EvidenceCard.model_validate(item) for item in self.report_result.evidence_cards]
-                annex, _ = EvidenceCardPipeline.annex(cards)
-                report = f"{report}\n\n{annex}".strip()
         if "required_section" in failures and not report.lstrip().startswith("#"):
             report = "# 研究报告\n\n" + report
         if "source_diversity" in failures and "局限" not in report:
@@ -448,9 +470,18 @@ class PlanExecuteReportDriver:
         if "evidence_card_coverage" in failures and self.report_result.evidence_cards:
             from deepresearch_agent.agents.multi_agent.reporter.evidence_cards import EvidenceCardPipeline, EvidenceCard
             cards = [EvidenceCard.model_validate(item) for item in self.report_result.evidence_cards]
-            annex, _ = EvidenceCardPipeline.annex(cards)
-            report = re.sub(r"(?ms)^## 全量证据索引\s*.*$", "", report).rstrip()
-            report = f"{report}\n\n{annex}"
+            processed_ids = [
+                evidence_id
+                for section in self.report_result.sections
+                for evidence_id in section.used_evidence_ids
+            ]
+            index_ids = [card.evidence_id for card in cards]
+            coverage = EvidenceCardPipeline.coverage(
+                cards, self.report_result.evidence_routing, processed_ids, index_ids,
+            )
+            self.report_result.evidence_card_coverage = coverage
+            if not coverage.get("passed"):
+                return False
         self.report_result.final_report = report
         self.state.response = report
         self._repair_pending = True

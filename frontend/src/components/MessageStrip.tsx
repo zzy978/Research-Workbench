@@ -6,10 +6,11 @@ interface MessageStripProps {
   onToggle: () => void;
   messages: Message[];
   runs: Map<string, Run>;
+  onOpenReport?: (runId: string) => void;
 }
 
 /** 可折叠会话消息条：默认单行摘要，展开后最多 240px 高度滚动列表 */
-export function MessageStrip({ collapsed, onToggle, messages, runs }: MessageStripProps) {
+export function MessageStrip({ collapsed, onToggle, messages, runs, onOpenReport }: MessageStripProps) {
   return <section className="msg-strip">
     <button type="button" className="msg-strip-toggle" onClick={onToggle} aria-expanded={!collapsed}>
       <span className="msg-strip-icon">{collapsed ? "☰" : "▾"}</span>
@@ -26,15 +27,28 @@ export function MessageStrip({ collapsed, onToggle, messages, runs }: MessageStr
         {messages.length === 0 && <div className="msg-strip-empty">暂无消息</div>}
         {messages.map((message) => {
           const linked = message.run_id ? runs.get(message.run_id) : undefined;
-          return <div key={message.message_id} className={`message ${message.role} is-strip`}>
+          const isReport = message.role === "assistant" && Boolean(linked) && message.content.length > 1200;
+          const preview = isReport ? reportPreview(message.content) : message.content;
+          return <div key={message.message_id} className={`message ${message.role} is-strip${isReport ? " is-report-summary" : ""}`}>
             <div className="message-meta">
               <span>{message.role === "user" ? "你" : "Research Agent"}</span>
               {linked && <span className={`source-badge ${linked.source_mode}`}>{linked.source_mode === "web" ? "Web" : "私有库"}</span>}
             </div>
-            <div className="message-body">{message.content}</div>
+              <div className="message-body">{preview}</div>
+              {isReport && linked && <div className="message-report-meta"><span>{message.content.length.toLocaleString()} 字符 · 完整内容已收纳到报告工作区</span><button type="button" onClick={() => onOpenReport?.(linked.run_id)}>查看完整报告 →</button></div>}
           </div>;
         })}
       </div>
     </motion.div>
   </section>;
+}
+
+function reportPreview(content: string): string {
+  return content
+    .replace(/^##\s+全量证据索引\s*[\s\S]*$/m, "")
+    .replace(/^#{1,4}\s+/gm, "")
+    .replace(/\[(?:\^)?ev_[\w-]+\]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 260) + "…";
 }

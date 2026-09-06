@@ -87,7 +87,7 @@ export function CardDetailDrawer({ stageId, run, feed, report, evidence, context
   const stage = STAGES.find((item) => item.id === stageId) ?? STAGES[2];
   return <motion.div className="drawer-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }} onClick={onClose}>
     <motion.aside
-      className={`card-detail-drawer${stageId === "context_building" ? " context-drawer" : ""}`}
+      className={`card-detail-drawer${stageId === "context_building" ? " context-drawer" : ""}${stageId === "reporting" || (stageId === "completed" && report?.content) ? " report-drawer" : ""}`}
       initial={{ x: "100%" }}
       animate={{ x: 0 }}
       exit={{ x: "100%" }}

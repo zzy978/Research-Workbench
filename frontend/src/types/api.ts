@@ -26,7 +26,16 @@ export interface Evidence {
   evidence_id: string; source_mode: SourceMode; provider: string; source_id: string; title?: string | null;
   summary: string; metadata: Record<string, unknown>; score: number; created_at: string;
 }
-export interface Report { run_id: string; status: string; content?: string | null; verification: Array<{kind: string; required: boolean; passed?: boolean | null; evidence: Record<string, unknown>}>; }
+export interface ReportEvidenceIndex {
+  evidence_id: string; title?: string | null; source_id: string; source_mode: SourceMode;
+  provider: string; summary: string; url?: string | null; score: number;
+}
+export interface ReportSection { id: string; title: string; level: number; }
+export interface Report {
+  run_id: string; status: string; content?: string | null; report_mode?: "normal" | "budget_fallback";
+  sections?: ReportSection[]; evidence_index?: ReportEvidenceIndex[];
+  verification: Array<{kind: string; required: boolean; passed?: boolean | null; evidence: Record<string, unknown>}>;
+}
 export interface RunEvent { event_id?: number; event_type: string; stage?: string; [key: string]: unknown; }
 export interface WhiteboardEntry {
   id: string; kind: "message" | "event" | "tool"; run_id?: string | null;

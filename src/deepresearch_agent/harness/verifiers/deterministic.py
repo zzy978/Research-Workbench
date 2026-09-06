@@ -94,13 +94,11 @@ class DeterministicVerifiers:
         routed_ids = set(coverage.get("routed_ids") or [])
         processed_ids = set(coverage.get("processed_ids") or [])
         annex_ids = set(coverage.get("annex_ids") or [])
-        report_ids = set(_CITATION.findall(self.report))
         missing = {
             "cards": sorted(ledger_ids - card_ids),
             "routed": sorted(ledger_ids - routed_ids),
             "processed": sorted(ledger_ids - processed_ids),
             "annex": sorted(ledger_ids - annex_ids),
-            "report": sorted(ledger_ids - report_ids),
         }
         exact_sets = (
             ledger_ids == card_ids == routed_ids == processed_ids == annex_ids
@@ -115,7 +113,7 @@ class DeterministicVerifiers:
         return self._check(
             "evidence_card_coverage",
             passed,
-            expected="Ledger/Card/路由/处理/附录/报告引用的 Evidence ID 集合完全一致",
+            expected="Ledger/Card/路由/处理/结构化证据索引的 Evidence ID 集合完全一致",
             observed={
                 "ledger_count": len(ledger_ids),
                 "card_count": reported_card_count,
@@ -123,10 +121,9 @@ class DeterministicVerifiers:
                 "routed_count": len(routed_ids),
                 "processed_count": len(processed_ids),
                 "annex_count": len(annex_ids),
-                "report_reference_count": len(report_ids & ledger_ids),
                 "missing_by_stage": missing,
             },
-            explanation="全量 Evidence Card 覆盖门禁禁止任何证据被静默丢弃",
+            explanation="全量 Evidence Card 保存在结构化证据台账中；正文只需引用支撑结论的证据",
         )
 
     def _claim_lines(self) -> list[str]:

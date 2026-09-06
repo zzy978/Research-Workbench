@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 
 from fastapi import APIRouter, Depends, Header, Query, Request, status
 from sse_starlette.sse import EventSourceResponse
@@ -16,6 +17,75 @@ from deepresearch_agent.persistence.repositories import (
 from deepresearch_agent.context import ArtifactEditContextBuilder
 
 router = APIRouter(prefix="/runs", tags=["runs"])
+
+_EVIDENCE_ANNEX = re.compile(r"(?ms)^##\s+全量证据索引\s*.*$")
+
+
+def _report_presentation(content: str | None, *, evidence_count: int = 0) -> tuple[str | None, str, list[dict[str, object]]]:
+    """Separate the readable report from legacy inline evidence annexes."""
+    if not content:
+        return None, "normal", []
+    report_mode = "budget_fallback" if "预算保护模式" in content[:240] else "normal"
+    body = _EVIDENCE_ANNEX.sub("", content).strip()
+    if report_mode == "budget_fallback":
+        body = _compact_fallback_report(body, evidence_count=evidence_count)
+    sections: list[dict[str, object]] = []
+    for index, match in enumerate(re.finditer(r"(?m)^(#{1,4})\s+(.+?)\s*$", body)):
+        title = match.group(2).strip()
+        sections.append({"id": f"report-section-{index}", "title": title, "level": len(match.group(1))})
+    return body, report_mode, sections
+
+
+def _compact_fallback_report(content: str, *, evidence_count: int) -> str:
+    """Make legacy deterministic card dumps readable without mutating history."""
+    output: list[str] = []
+    kept_in_section = 0
+    omitted_in_section = 0
+
+    def flush_omitted() -> None:
+        nonlocal omitted_in_section
+        if omitted_in_section:
+            output.extend(["", f"本节另有 {omitted_in_section} 条证据保存在“证据”视图中。"])
+            omitted_in_section = 0
+
+    for raw in content.splitlines():
+        stripped = raw.strip()
+        if stripped.startswith("## "):
+            flush_omitted()
+            kept_in_section = 0
+            title = stripped[3:].strip()
+            output.extend(["", f"## {title if len(title) <= 46 else title[:46].rstrip() + '…'}"])
+            continue
+        if raw.startswith("- "):
+            if kept_in_section >= 4:
+                omitted_in_section += 1
+                continue
+            citations = re.findall(r"\[(?:\^)?ev_[A-Za-z0-9_-]+\]", stripped)
+            claim = re.sub(r"\[(?:\^)?ev_[A-Za-z0-9_-]+\]", "", stripped[2:])
+            claim = _evidence_summary(re.sub(r"[`#>*_|]+", " ", claim), limit=360)
+            if not claim:
+                continue
+            output.append(f"- {claim}{(' ' + ' '.join(citations)) if citations else ''}")
+            kept_in_section += 1
+            continue
+        if raw.startswith("  - "):
+            continue
+        output.append(raw.rstrip())
+    flush_omitted()
+    if evidence_count:
+        output.extend(["", f"> 完整证据台账共 {evidence_count} 条，请在报告顶部切换到“证据”视图核查来源与摘要。"])
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(output)).strip()
+
+
+def _evidence_summary(value: str | None, *, limit: int = 480) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    text = re.sub(
+        r"(?i)skip to content|navigation menu|sign in|cookie settings|loading(?:\s+loading)+|documentation index",
+        " ",
+        text,
+    )
+    text = re.sub(r"\s+", " ", text).strip()
+    return text if len(text) <= limit else text[:limit].rstrip() + "…"
 
 
 def run_dict(run):
@@ -107,8 +177,24 @@ async def get_report(run_id: str, database=Depends(get_database)):
     message = await MessageRepository(database).get_assistant_for_run(run_id)
     artifact = await ArtifactRepository(database).get_report(run_id)
     checks = await ContractRepository(database).list_for_run(run_id)
+    evidence = await EvidenceRepository(database).list_for_run(run_id)
+    content, report_mode, sections = _report_presentation(message.content if message else None, evidence_count=len(evidence))
     return {
-        "run_id": run_id, "status": run.status, "content": message.content if message else None,
+        "run_id": run_id, "status": run.status, "content": content,
+        "report_mode": report_mode, "sections": sections,
+        "evidence_index": [
+            {
+                "evidence_id": item.evidence_id,
+                "title": item.title,
+                "source_id": item.source_id,
+                "source_mode": item.source_mode,
+                "provider": item.provider,
+                "summary": _evidence_summary(item.summary),
+                "url": (json.loads(item.metadata_json or "{}").get("url") or item.source_id),
+                "score": item.score,
+            }
+            for item in evidence
+        ],
         "artifact": None if artifact is None else {"artifact_id": artifact.artifact_id, "relative_path": artifact.relative_path, "sha256": artifact.sha256, "size_bytes": artifact.size_bytes},
         "verification": [
             {"check_id": check.check_id, "kind": check.kind, "required": bool(check.required), "passed": None if check.passed is None else bool(check.passed), "evidence": json.loads(check.evidence_json or "{}")}
