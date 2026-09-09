@@ -329,6 +329,29 @@ OPENAI_EMBEDDING_BATCH_SIZE = _require_positive(
     _get_env_int("OPENAI_EMBEDDING_BATCH_SIZE", 10) or 10,
 )
 OPENAI_LLM_MODEL = os.getenv("OPENAI_LLM_MODEL") or None
+
+# 独立向量服务不继承生成模型的密钥；旧部署仍可使用原来的共享配置。
+EMBEDDING_BASE_URL = os.getenv("EMBEDDING_BASE_URL", OPENAI_BASE_URL).strip()
+EMBEDDING_API_KEY = os.getenv(
+    "EMBEDDING_API_KEY",
+    "" if os.getenv("EMBEDDING_BASE_URL", "").strip() else OPENAI_API_KEY,
+)
+OPENAI_EMBEDDINGS_MODEL = os.getenv("EMBEDDING_MODEL", OPENAI_EMBEDDINGS_MODEL) or None
+OPENAI_EMBEDDING_DIMENSIONS = _get_env_int("EMBEDDING_DIMENSIONS", OPENAI_EMBEDDING_DIMENSIONS)
+if OPENAI_EMBEDDING_DIMENSIONS is not None:
+    _require_positive("EMBEDDING_DIMENSIONS", OPENAI_EMBEDDING_DIMENSIONS)
+OPENAI_EMBEDDING_BATCH_SIZE = _require_positive(
+    "EMBEDDING_REQUEST_BATCH_SIZE",
+    _get_env_int("EMBEDDING_REQUEST_BATCH_SIZE", OPENAI_EMBEDDING_BATCH_SIZE),
+)
+
+LLM_PROVIDER = _get_env_choice("LLM_PROVIDER", {"openai", "deepseek"}, "openai")
+if LLM_PROVIDER == "deepseek":
+    # 保留内部 OPENAI_* 名称，使健康检查、后台任务和所有模型工厂使用同一配置。
+    OPENAI_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+    OPENAI_BASE_URL = os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
+    OPENAI_LLM_MODEL = os.getenv("DEEPSEEK_MODEL") or "deepseek-v4-pro"
+
 MEMORY_LLM_MODEL = os.getenv("MEMORY_LLM_MODEL") or OPENAI_LLM_MODEL
 MEMORY_LLM_MIN_CONFIDENCE = _get_env_float("MEMORY_LLM_MIN_CONFIDENCE", 0.75) or 0.75
 if not 0.0 <= MEMORY_LLM_MIN_CONFIDENCE <= 1.0:
@@ -351,8 +374,8 @@ LLM_MAX_RETRIES = max(0, _get_env_int("LLM_MAX_RETRIES", 1) or 0)
 
 OPENAI_EMBEDDING_CONFIG = {
     "model": OPENAI_EMBEDDINGS_MODEL,
-    "api_key": OPENAI_API_KEY,
-    "base_url": OPENAI_BASE_URL,
+    "api_key": EMBEDDING_API_KEY,
+    "base_url": EMBEDDING_BASE_URL,
     "dimensions": OPENAI_EMBEDDING_DIMENSIONS,
     "chunk_size": OPENAI_EMBEDDING_BATCH_SIZE,
 }

@@ -1,4 +1,4 @@
-aiohttp==3.8.5
+aiohttp==3.9.5
 chardet==3.0.4 
 fastapi==0.115.11
 faiss-cpu==1.11.0
@@ -48,7 +48,10 @@ pytest>=8.0,<9.0
 pytest-asyncio>=0.23,<1.0
 
 # linux: sudo apt-get install python-dev-is-python3 libxml2-dev libxslt1-dev antiword unrtf poppler-utils
-textract==1.6.3
+# Legacy .doc fallback pins six==1.12.0, whose importer cannot run on Python 3.12.
+# On Python 3.12+, use Word COM for .doc or convert documents to .docx.
+textract==1.6.3; python_version < "3.12"
+six>=1.16.0,<2.0; python_version >= "3.12"
 
 # windows
 # pywin32>=302

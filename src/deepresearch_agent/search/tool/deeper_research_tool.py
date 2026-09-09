@@ -398,14 +398,7 @@ class DeeperResearchTool:
                 f"\n开始第 {iteration + 1} 轮迭代思考\n"
             )
             
-            # 检查是否达到最大迭代次数
-            if iteration >= self.deep_research.max_iterations - 1:
-                summary_think = f"\n搜索次数已达上限。不允许继续搜索。\n"
-                self.thinking_engine.add_reasoning_step(summary_think)
-                self.thinking_engine.add_human_message(summary_think)
-                think += self.thinking_engine.remove_result_tags(summary_think)
-                self._log("\n[深度研究] 达到最大迭代次数，结束搜索")
-                break
+            # range(max_iterations) bounds search rounds; do not reserve the last round for synthesis.
 
             # 更新消息历史，请求继续推理
             self.thinking_engine.update_continue_message()
@@ -1577,17 +1570,7 @@ class DeeperResearchTool:
                 f"\n开始第 {iteration + 1} 轮迭代思考\n"
             )
             
-            # 检查是否达到最大迭代次数
-            if iteration >= self.deep_research.max_iterations - 1:
-                limit_msg = "**\n已达到最大搜索次数限制，准备生成最终答案**...\n"
-                yield limit_msg
-                self._log("\n[深度研究] 达到最大迭代次数，结束搜索")
-                
-                summary_think = f"\n搜索次数已达上限。不允许继续搜索。\n"
-                self.deep_research.thinking_engine.add_reasoning_step(summary_think)
-                self.deep_research.thinking_engine.add_human_message(summary_think)
-                think += self.deep_research.thinking_engine.remove_result_tags(summary_think)
-                break
+            # range(max_iterations) bounds search rounds; do not reserve the last round for synthesis.
             
             # 更新消息历史，请求继续推理
             self.deep_research.thinking_engine.update_continue_message()

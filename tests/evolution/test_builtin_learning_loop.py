@@ -1,4 +1,6 @@
+import asyncio
 import json
+from pydantic import ValidationError
 
 import pytest
 import pytest_asyncio
@@ -6,7 +8,7 @@ import pytest_asyncio
 from backend.app.schemas import MessageCreate, RunCreate, SessionCreate
 from deepresearch_agent.evolution import PromotionPolicy, SkillEvaluator, SkillLearningService, SkillRegistry, SkillSpec
 from deepresearch_agent.evolution.review_agents import _normalize_skill_proposal
-from deepresearch_agent.evolution.review_schema import ReviewPack, SkillProposal
+from deepresearch_agent.evolution.review_schema import CriticReview, ReviewPack, SkillProposal
 from deepresearch_agent.evolution.validators import ProposalValidators
 from deepresearch_agent.harness import SourceMode, WorkflowMode
 from deepresearch_agent.harness.contracts import ContractCheckData
@@ -51,6 +53,96 @@ class RecordingEvents:
         self.items.append({"run_id": run_id, "event_type": event_type, "stage": stage, "payload": payload or {}})
 
 
+def test_ignore_requires_a_reason():
+    with pytest.raises(ValidationError):
+        SkillProposal(decision="ignore", rationale="   ")
+
+
+def test_critic_cannot_reject_a_missing_model_response_as_skill_quality():
+    with pytest.raises(ValidationError):
+        CriticReview(decision="reject", blocking_issues=["Content to repair is missing."])
+
+    with pytest.raises(ValidationError):
+        CriticReview(decision="reject", scores={key: 0 for key in ["grounding", "generalizability", "safety", "cost_control", "consistency"]},
+                     blocking_issues=["Content to repair is missing."])
+    review = CriticReview(decision="reject", scores={key: 0 for key in ["grounding", "generalizability", "safety", "cost_control", "consistency"]},
+                          blocking_issues=["No validation for missing input"])
+    assert review.decision == "reject"
+
+
+@pytest.mark.asyncio
+async def test_empty_proposal_is_technical_failure_and_preserves_raw_output(env):
+    database, skills, registry = env
+    run = await completed_run(database)
+    class EmptyLLM:
+        async def ainvoke(self, prompt):
+            return type("Response", (), {"content": ""})()
+    events = RecordingEvents()
+    service = SkillLearningService(database, LearningReviewRepository(database), skills, registry,
+        proposer_llm=EmptyLLM(), critic_llm=JsonLLM(), events=events, max_retries=0)
+    job = await service.enqueue_for_run(run.run_id)
+    await service._tasks[job.review_id]
+    saved = await service.repository.get(job.review_id)
+    assert saved.status == "failed" and not saved.candidate_id
+    assert any(e["event_type"] == "learning.model.response" and e["payload"]["raw"] == "" for e in events.items)
+
+
+@pytest.mark.asyncio
+async def test_repair_has_original_context_and_records_both_responses():
+    from deepresearch_agent.evolution.review_agents import _invoke_typed_json
+    prompts, responses = [], []
+    class RepairLLM:
+        async def ainvoke(self, prompt):
+            prompts.append(prompt)
+            content = '{"decision":"ignore"}' if len(prompts) == 1 else '{"decision":"ignore","rationale":"No reusable increment in run-example"}'
+            return type("Response", (), {"content": content})()
+    async def record_response(item):
+        responses.append(item)
+    result = await _invoke_typed_json(RepairLLM(), "ReviewPack: run-example", SkillProposal, record_response=record_response)
+    assert result.decision == "ignore"
+    assert len(prompts) == 2 and "ReviewPack: run-example" in prompts[1]
+    assert [r["attempt"] for r in responses] == ["initial", "repair"]
+
+
+@pytest.mark.asyncio
+async def test_ignored_review_retry_preserves_previous_reason(env, monkeypatch):
+    database, skills, registry = env
+    run = await completed_run(database)
+    repository = LearningReviewRepository(database)
+    job = await repository.enqueue(run_id=run.run_id, terminal_event_id=0)
+    await repository.update(job.review_id, status="completed", proposal={"decision": "ignore", "rationale": "old reason"},
+                            review_pack={"user_goal": "old goal"}, checkpoint={"stage": "ignored"})
+    events = RecordingEvents()
+    service = SkillLearningService(database, repository, skills, registry, events=events)
+    scheduled = []
+    monkeypatch.setattr(service, "schedule", scheduled.append)
+    results = await asyncio.gather(service.retry(job.review_id), service.retry(job.review_id), return_exceptions=True)
+    assert sum(isinstance(result, ValueError) for result in results) == 1
+    assert scheduled == [job.review_id]
+    assert (await repository.get(job.review_id)).status == "queued"
+    assert events.items[0]["payload"]["proposal"]["rationale"] == "old reason"
+    assert events.items[0]["payload"]["review_pack"] == {"user_goal": "old goal"}
+    assert events.items[0]["payload"]["checkpoint"] == {"stage": "ignored"}
+
+
+@pytest.mark.asyncio
+async def test_pack_marks_budget_fallback_and_unfinished_tasks(env):
+    from deepresearch_agent.evolution.review_pack import ReviewPackBuilder
+    from deepresearch_agent.persistence.models import CheckpointModel
+    database, _, _ = env
+    run = await completed_run(database)
+    state = {"workflow_state": {
+        "report_result": {"report_metrics": {"reserved_budget_fallback": True}},
+        "state": {"plan": {"task_graph": {"nodes": [{"task_id": "synthesis", "status": "pending"}]}}},
+    }}
+    async with database.transaction() as db:
+        db.add(CheckpointModel(checkpoint_id="cp-test", run_id=run.run_id, version=1,
+            stage="completed", state_json=json.dumps(state), state_hash="test", schema_version=1, created_at=utc_now_iso()))
+    pack = await ReviewPackBuilder(database).build(review_id="review-test", run_id=run.run_id)
+    assert pack.episodes[0].episode_type == "inefficiency"
+    assert pack.context_and_budget_metrics["incomplete_task_ids"] == ["synthesis"]
+
+
 class ReviseToIgnoreLLM:
     def __init__(self):
         self.proposals = 0
@@ -58,7 +150,7 @@ class ReviseToIgnoreLLM:
     async def ainvoke(self, prompt):
         if "Skill Critic" in prompt:
             return type("Response", (), {"content": json.dumps({
-                "decision": "revise", "scores": {"grounding": .8}, "blocking_issues": [],
+                "decision": "revise", "scores": {"grounding": .8, "generalizability": .8, "safety": .8, "cost_control": .8, "consistency": .8}, "blocking_issues": [],
                 "revision_instructions": ["没有稳定增量时忽略"], "unsupported_rule_refs": [], "conflict_refs": [],
             })})()
         self.proposals += 1

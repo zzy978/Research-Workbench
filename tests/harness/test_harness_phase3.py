@@ -456,6 +456,8 @@ async def test_zero_evidence_replans_once_then_fails_fast_without_report(databas
     stored = await RunRepository(database).get(run.run_id)
     assert stored.error_code == "NO_SOURCE_EVIDENCE"
     assert "导入与该主题相关的私域资料" in stored.error_message
+    assert "检查私域索引与检索日志" in stored.error_message
+    assert "连续两轮检索" not in stored.error_message
     events = await EventRepository(database).list_after(run.run_id)
     names = [event.event_type for event in events]
     assert names.count("source.coverage_checked") == 2

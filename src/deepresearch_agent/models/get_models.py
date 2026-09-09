@@ -29,6 +29,8 @@ def setup_cache():
 setup_cache()
 
 def get_embeddings_model():
+    if not OPENAI_EMBEDDING_CONFIG.get("api_key"):
+        raise ValueError("请配置向量服务 EMBEDDING_API_KEY（旧配置使用 OPENAI_API_KEY）")
     config = {k: v for k, v in OPENAI_EMBEDDING_CONFIG.items() if v}
     if is_bailian_compatible_url(config.get("base_url")):
         return BailianOpenAIEmbeddings(**config)

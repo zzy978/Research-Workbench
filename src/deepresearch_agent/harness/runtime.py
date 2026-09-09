@@ -238,7 +238,7 @@ class HarnessRuntime:
                             continue
 
                         source_hint = (
-                            "请导入与该主题相关的私域资料，或改用联网搜索。"
+                            "请先检查私域索引与检索日志；确认缺少资料时，再导入与该主题相关的私域资料。"
                             if context.source_mode is SourceMode.GRAPHRAG
                             else "请调整问题或检查联网检索配置。"
                         )
@@ -253,7 +253,12 @@ class HarnessRuntime:
                             RunStatus.FAILED,
                             event_type="run.failed",
                             error_code=error_code,
-                            error_message=f"连续两轮检索后{evidence_summary}；{source_hint}",
+                            error_message=(
+                                ("未记录到正式检索调用，研究未取得可验证证据"
+                                 if not any(record.tool_calls for record in driver.execution_records())
+                                 else evidence_summary)
+                                + f"；{source_hint}"
+                            ),
                             payload={
                                 "recovery_action": "fail",
                                 "recovery_reason": coverage_reason,

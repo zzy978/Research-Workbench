@@ -17,6 +17,7 @@ const PIPELINE = [
 
 const EVENT_NAMES: Record<string, string> = {
   "learning.review.queued": "学习任务入队", "learning.review.started": "后台复盘开始",
+  "learning.model.response": "模型原始响应与修复记录", "learning.review.previous_result": "重试前的复盘结果",
   "learning.review_pack.built": "Review Pack 构建完成", "learning.review.ignored": "本次轨迹无需沉淀",
   "learning.review.failed": "学习任务失败", "learning.review.retried": "学习任务重试",
   "skill.proposal.created": "Proposer 生成提案", "skill.proposal.revised": "Proposer 修订提案",
@@ -75,12 +76,19 @@ function EvaluationPanel({detail}: {detail: EvolutionReviewDetail}) {
   </div>;
 }
 
+function reviewLabel(status: string, ignored: boolean, candidate: boolean): string {
+  if (status === "completed") return candidate ? "已生成候选" : ignored ? "未提炼经验" : "复盘完成";
+  return ({failed: "复盘技术失败", rejected: "提案未通过审查", retry_wait: "等待重试"} as Record<string, string>)[status] ?? status;
+}
+
 function Detail({detail, onRetry, retrying}: {detail: EvolutionReviewDetail; onRetry: () => void; retrying: boolean}) {
   const pack = detail.review_pack ?? {}; const proposal = detail.proposal ?? {}; const critic = detail.critic ?? {};
   const validation = detail.validation ?? {}; const candidate = record(detail.candidate); const candidatePayload = record(candidate.payload);
   const spec = record(candidatePayload.spec); const content = String(candidatePayload.content ?? "");
   return <section className="evo-detail">
-    <header className="evo-detail-head"><div><span className="eyebrow">LEARNING TRACE</span><h2>{String(proposal.name ?? proposal.target_skill_id ?? "Learning Review")}</h2><p>{detail.goal}</p></div><div className="evo-detail-status"><span className={`evo-status ${detail.status}`}>{detail.status}</span><code>{detail.review_id}</code>{["failed", "rejected"].includes(detail.status) && <button onClick={onRetry} disabled={retrying}>{retrying ? "重试中…" : "重新复盘"}</button>}</div></header>
+    <header className="evo-detail-head"><div><span className="eyebrow">LEARNING TRACE</span><h2>{String(proposal.name ?? proposal.target_skill_id ?? "Learning Review")}</h2><p>{detail.goal}</p></div><div className="evo-detail-status"><span className={`evo-status ${detail.status}`}>{reviewLabel(detail.status, proposal.decision === "ignore", Boolean(detail.candidate_id))}</span><code>{detail.review_id}</code>{(["failed", "rejected"].includes(detail.status) || (detail.status === "completed" && proposal.decision === "ignore" && !detail.candidate_id)) && <button onClick={onRetry} disabled={retrying}>{retrying ? "重试中…" : "重新复盘"}</button>}</div></header>
+    {detail.error_message ? <p role="alert">复盘未完成：{String(detail.error_message)}</p> : null}
+    {detail.status === "completed" && proposal.decision === "ignore" && <p>未生成候选：{String(proposal.rationale || "历史记录未保存忽略理由，可重新复盘。")}</p>}
     <div className="evo-pipeline">{PIPELINE.map(([key, label, sub]) => <div className={`evo-stage ${stageState(detail, key)}`} key={key}><i>{stageState(detail, key) === "done" ? "✓" : ""}</i><strong>{label}</strong><small>{sub}</small></div>)}</div>
 
     <div className="evo-detail-grid">
@@ -113,7 +121,7 @@ export function EvolutionPage() {
       ["Active", overview.data?.versions.by_status.active ?? 0], ["Token Δ", overview.data?.impact.token_delta ?? 0],
     ].map(([label, value]) => <div key={String(label)}><small>{label}</small><strong>{fmt(value)}</strong></div>)}</section>
     <section className="evo-funnel"><h2>学习漏斗</h2><div>{overview.data?.funnel.map((item) => <span key={item.stage}><i style={{width: `${Math.max(8, item.count / funnelMax * 100)}%`}} /><b>{item.stage}</b><em>{item.count}</em></span>)}</div></section>
-    <section className="evo-workbench"><aside className="evo-review-list"><header><h2>学习任务</h2><span>{reviews.data?.total ?? 0}</span></header><div className="evo-filters"><input value={q} onChange={(event) => setQ(event.target.value)} placeholder="搜索任务、Run 或 Skill" /><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">全部状态</option><option value="queued">Queued</option><option value="completed">Completed</option><option value="rejected">Rejected</option><option value="failed">Failed</option></select></div><div className="evo-review-scroll">{reviews.data?.items.map((item) => <button key={item.review_id} className={selected === item.review_id ? "selected" : ""} onClick={() => setSelected(item.review_id)}><div><strong>{item.skill_name || "轨迹复盘"}</strong><span className={`evo-status ${item.status}`}>{item.status}</span></div><p>{item.goal}</p><small>{item.source_mode} · {item.workflow_mode} · {time(item.updated_at)}</small><code>{item.review_id}</code></button>)}{reviews.data && !reviews.data.items.length && <div className="evo-empty">暂无学习任务，请先完成一次新的研究 Run。</div>}</div></aside>
+    <section className="evo-workbench"><aside className="evo-review-list"><header><h2>学习任务</h2><span>{reviews.data?.total ?? 0}</span></header><div className="evo-filters"><input value={q} onChange={(event) => setQ(event.target.value)} placeholder="搜索任务、Run 或 Skill" /><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">全部状态</option><option value="queued">Queued</option><option value="completed">复盘完成</option><option value="rejected">提案未通过审查</option><option value="failed">复盘技术失败</option></select></div><div className="evo-review-scroll">{reviews.data?.items.map((item) => <button key={item.review_id} className={selected === item.review_id ? "selected" : ""} onClick={() => setSelected(item.review_id)}><div><strong>{item.skill_name || "轨迹复盘"}</strong><span className={`evo-status ${item.status}`}>{reviewLabel(item.status, item.decision === "ignore", Boolean(item.candidate_id))}</span></div><p>{item.goal}</p><small>{item.source_mode} · {item.workflow_mode} · {time(item.updated_at)}</small><code>{item.review_id}</code></button>)}{reviews.data && !reviews.data.items.length && <div className="evo-empty">暂无学习任务，请先完成一次新的研究 Run。</div>}</div></aside>
       <div className="evo-detail-host">{detail.data ? <Detail detail={detail.data} onRetry={() => retry.mutate()} retrying={retry.isPending} /> : <div className="evo-empty large">选择一条 Learning Review 查看完整链路。</div>}</div>
     </section>
   </main>;

@@ -1,6 +1,12 @@
 import sys
 from pathlib import Path
 
+# On Windows, initialize PyTorch's native runtime before the graph imports
+# load pandas. In the supported environment, pandas -> torch fails to load
+# c10.dll (WinError 1114), while torch -> pandas initializes successfully.
+if sys.platform == "win32":
+    import torch  # noqa: F401
+
 # src 布局：脚本从项目根目录直接运行时，将 src 加入 sys.path 以定位 deepresearch_agent 包
 _SRC = Path(__file__).resolve().parent / "src"
 if str(_SRC) not in sys.path:

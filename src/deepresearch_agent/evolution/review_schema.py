@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Literal
+import re
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -78,6 +79,8 @@ class SkillProposal(BaseModel):
     @model_validator(mode="after")
     def require_actionable_candidate(self):
         if self.decision == "ignore":
+            if not self.rationale.strip():
+                raise ValueError("ignore 必须说明基于轨迹的具体忽略理由")
             return self
         missing: list[str] = []
         if not self.trace_refs:
@@ -106,6 +109,35 @@ class CriticReview(BaseModel):
     revision_instructions: list[str] = Field(default_factory=list)
     unsupported_rule_refs: list[str] = Field(default_factory=list)
     conflict_refs: list[str] = Field(default_factory=list)
+    technical_error: str | None = None
+
+    @model_validator(mode="after")
+    def require_substantive_review(self):
+        technical_diagnostic = (
+            r"content to repair is missing|(?:missing|empty) (?:input|response|content)|"
+            r"(?:input|response|content) (?:is |was )?(?:missing|empty)|"
+            r"缺少待修复内容|缺少输入|模型返回空|响应为空|格式修复失败"
+        )
+        if self.technical_error or any(
+            re.fullmatch(technical_diagnostic, issue.strip().rstrip(".。!！"), re.I)
+            for issue in self.blocking_issues
+        ):
+            raise ValueError("Critic 报告的是技术故障，不是 Skill 质量结论")
+        dimensions = {"grounding", "generalizability", "safety", "cost_control", "consistency"}
+        if not dimensions.issubset(self.scores):
+            raise ValueError("Critic 必须提供五项质量评分；缺少输入或输出异常不是质量拒绝")
+        if any(not 0 <= value <= 1 for value in self.scores.values()):
+            raise ValueError("Critic 评分必须在 0 到 1 之间")
+        if self.decision == "pass" and (
+            any(self.scores[key] < .7 for key in dimensions)
+            or self.blocking_issues or self.unsupported_rule_refs or self.conflict_refs
+        ):
+            raise ValueError("存在阻塞问题或评分不足，不能判定通过")
+        if self.decision == "reject" and not any(issue.strip() for issue in self.blocking_issues):
+            raise ValueError("拒绝必须给出具体质量问题")
+        if self.decision == "revise" and not any(item.strip() for item in self.revision_instructions):
+            raise ValueError("修订必须给出具体修改要求")
+        return self
 
 
 class ValidationResult(BaseModel):

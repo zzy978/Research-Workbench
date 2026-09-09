@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import unicodedata
 from typing import Any, Mapping, Optional
 
 from deepresearch_agent.agents.multi_agent.core.retrieval_result import RetrievalResult
@@ -56,19 +57,25 @@ class GraphRAGProvider:
     @staticmethod
     def _filter_relevant(query: str, results: list[RetrievalResult]) -> list[RetrievalResult]:
         """Reject graph chunks that do not mention the query's subject at all."""
+        query = unicodedata.normalize("NFKC", query)
         stop = {"私有库中", "私有数据库", "药物治疗原则", "总结库内材料", "引用证据", "三条要点"}
-        chinese_segments = re.split(r"[，。！？；：、\s]|(?:是什么)|(?:请用)|(?:根据)|(?:概括)|(?:总结)|的", query)
+        chinese_segments = re.split(r"[，。！？；：、,!?;:\s]|(?:是什么)|(?:什么是)|(?:请用)|(?:根据)|(?:概括)|(?:总结)|的", query)
         subjects = [part for part in chinese_segments if len(part) >= 4 and part not in stop]
-        # Four-character overlaps such as “脑血管病” are too broad: they let
-        # hemorrhagic/general stroke chunks satisfy an ischemic-stroke query.
-        chinese_terms = subjects + [part[index:index + 6] for part in subjects if len(part) > 6 for index in range(len(part) - 5)]
+        # Keep subtype names intact: arbitrary n-grams can turn 缺血性 into 血性
+        # and incorrectly match 出血性. Only relax explicit temporal modifiers.
+        chinese_terms = subjects + [
+            re.sub(r"^(?:急性|慢性)", "", part)
+            for part in subjects
+            if part.startswith(("急性", "慢性")) and len(part) >= 6
+        ]
         latin_terms = [part.lower() for part in re.findall(r"[A-Za-z][A-Za-z0-9_-]{3,}", query)]
         terms = chinese_terms + latin_terms
         if not terms:
             return results
         relevant: list[RetrievalResult] = []
         for result in results:
-            text = str(result.evidence).lower()
+            # Normalize only the matching view; preserve original source text and IDs.
+            text = unicodedata.normalize("NFKC", str(result.evidence)).lower()
             matched = [term for term in terms if term.lower() in text]
             if matched:
                 result.metadata.extra["query_subject_matches"] = matched[:5]

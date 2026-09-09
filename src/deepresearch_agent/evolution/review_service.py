@@ -37,6 +37,7 @@ class SkillLearningService:
         self.enabled = enabled and proposer_llm is not None and critic_llm is not None
         self.max_retries = max_retries
         self._tasks: dict[str, asyncio.Task] = {}
+        self._retry_lock = asyncio.Lock()
 
     async def enqueue_for_run(self, run_id: str):
         if not self.enabled:
@@ -79,11 +80,26 @@ class SkillLearningService:
         return [job.review_id for job in jobs]
 
     async def retry(self, review_id: str):
+        async with self._retry_lock:
+            return await self._retry_locked(review_id)
+
+    async def _retry_locked(self, review_id: str):
         job = await self.repository.get(review_id)
         if job is None:
             return None
-        if job.status not in {"failed", "rejected"}:
-            raise ValueError("只有 failed/rejected Review 可以显式重试")
+        ignored = job.status == "completed" and not job.candidate_id and json.loads(job.proposal_json or "{}").get("decision") == "ignore"
+        if job.status not in {"failed", "rejected"} and not ignored:
+            raise ValueError("只有失败、拒绝或未生成候选的忽略复盘可以重试")
+        await self._publish(job.run_id, "learning.review.previous_result", {
+            "review_id": review_id, "status": job.status,
+            "proposal": json.loads(job.proposal_json or "{}"),
+            "critic": json.loads(job.critic_json or "{}"),
+            "validation": json.loads(job.validation_json or "{}"),
+            "review_pack": json.loads(job.review_pack_json or "{}"),
+            "checkpoint": json.loads(job.checkpoint_json or "{}"),
+            "retry_count": job.retry_count, "revision_count": job.revision_count,
+            "error_message": job.error_message,
+        })
         await self.repository.update(
             review_id, status="queued", retry_count=0, revision_count=0,
             error_message="", checkpoint={"stage": "queued", "reason": "explicit_retry"},
@@ -124,6 +140,10 @@ class SkillLearningService:
         if job is None or job.status in self.repository.TERMINAL:
             return job
         try:
+            async def record_response(payload):
+                await self._publish(job.run_id, "learning.model.response", {
+                    "review_id": review_id, "retry_count": job.retry_count, **payload,
+                })
             await self.repository.update(review_id, status="building_pack", checkpoint={"stage": "building_pack"})
             pack = await self._enrich_catalog(await self.builder.build(review_id=review_id, run_id=job.run_id))
             await self.repository.update(review_id, status="proposing", review_pack=pack.model_dump(mode="json"), checkpoint={"stage": "proposing"})
@@ -135,7 +155,8 @@ class SkillLearningService:
                 "trace_refs": sum(len(episode.trace_refs) for episode in pack.episodes),
                 "loaded_skills": len(pack.loaded_skills),
             })
-            proposal = await self.proposer.propose(pack)
+            proposal = await self.proposer.propose(pack, record_response=record_response)
+            await self.repository.update(review_id, status="proposing", proposal=proposal.model_dump(mode="json"))
             await self._publish(job.run_id, "skill.proposal.created", {
                 "review_id": review_id, "decision": proposal.decision,
                 "name": proposal.name or proposal.target_skill_id,
@@ -153,7 +174,7 @@ class SkillLearningService:
                 if proposal.base_content_hash != target.content_hash:
                     raise ValueError("Proposer 的 base_content_hash 与已读取版本不一致")
             await self.repository.update(review_id, status="criticizing", proposal=proposal.model_dump(mode="json"), checkpoint={"stage": "criticizing"})
-            critic = await self.critic.review(pack, proposal)
+            critic = await self.critic.review(pack, proposal, record_response=record_response)
             await self._publish(job.run_id, "skill.critic.completed", {
                 "review_id": review_id, "decision": critic.decision,
                 "blocking_issues": critic.blocking_issues,
@@ -167,7 +188,9 @@ class SkillLearningService:
                     pack,
                     revision_instructions=critic.revision_instructions,
                     previous_proposal=proposal,
+                    record_response=record_response,
                 )
+                await self.repository.update(review_id, status="revising", proposal=proposal.model_dump(mode="json"))
                 await self._publish(job.run_id, "skill.proposal.revised", {
                     "review_id": review_id, "revision": 1,
                     "instructions": critic.revision_instructions,
@@ -183,7 +206,7 @@ class SkillLearningService:
                         "after_revision": True,
                     })
                     return await self.repository.get(review_id)
-                critic = await self.critic.review(pack, proposal)
+                critic = await self.critic.review(pack, proposal, record_response=record_response)
                 await self._publish(job.run_id, "skill.critic.completed", {
                     "review_id": review_id, "decision": critic.decision,
                     "blocking_issues": critic.blocking_issues,

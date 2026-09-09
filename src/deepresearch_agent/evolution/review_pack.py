@@ -7,7 +7,7 @@ import json
 from sqlalchemy import select
 
 from deepresearch_agent.persistence.models import (
-    ContractCheckModel, EvidenceModel, MessageModel, RunEventModel, RunModel,
+    CheckpointModel, ContractCheckModel, EvidenceModel, MessageModel, RunEventModel, RunModel,
     SkillVersionModel, TaskModel, ToolCallModel,
 )
 
@@ -37,6 +37,19 @@ class ReviewPackBuilder:
             evidence = list((await session.execute(select(EvidenceModel).where(EvidenceModel.run_id == run_id))).scalars())
             checks = list((await session.execute(select(ContractCheckModel).where(ContractCheckModel.run_id == run_id))).scalars())
             events = list((await session.execute(select(RunEventModel).where(RunEventModel.run_id == run_id).order_by(RunEventModel.event_id))).scalars())
+            checkpoint = (await session.execute(select(CheckpointModel).where(
+                CheckpointModel.run_id == run_id
+            ).order_by(CheckpointModel.version.desc()).limit(1))).scalar_one_or_none()
+
+        # Learning failures are not failures of the research being reviewed.
+        events = [event for event in events if event.stage != "learning"]
+        state = _json(checkpoint.state_json) if checkpoint else {}
+        workflow = state.get("workflow_state", {})
+        report_metrics = (workflow.get("report_result") or {}).get("report_metrics", {})
+        plan = (workflow.get("state") or {}).get("plan") or {}
+        nodes = (plan.get("task_graph") or {}).get("nodes", [])
+        incomplete = [node.get("task_id") for node in nodes if node.get("status") != "completed"]
+        degraded = bool(report_metrics.get("reserved_budget_fallback"))
 
         evidence_by_call: dict[str, list[EvidenceModel]] = {}
         for item in evidence:
@@ -58,6 +71,8 @@ class ReviewPackBuilder:
         replans = [event for event in events if event.event_type in {"plan.replanning", "run.replanning"}]
         failures = [event for event in events if "failed" in event.event_type or "error" in event.event_type]
         episode_type = "recovery" if replans and run.status == "completed" else ("success" if run.status == "completed" else "failure")
+        if run.status == "completed" and (degraded or incomplete):
+            episode_type = "inefficiency"
         refs = [ref for card in cards for ref in card.trace_refs]
         episodes = [TrajectoryEpisode(
             episode_type=episode_type,
@@ -84,7 +99,9 @@ class ReviewPackBuilder:
             user_goal=(message.content if message else "")[:4000],
             workflow_mode=run.workflow_mode, source_mode=run.source_mode,
             terminal_status=run.status, completion_contract=contract,
-            context_and_budget_metrics={"budget": _json(run.budget_json), "usage": _json(run.usage_json), "model_snapshot": model_snapshot},
+            context_and_budget_metrics={"budget": _json(run.budget_json), "usage": _json(run.usage_json), "model_snapshot": model_snapshot,
+                "report_metrics": report_metrics, "incomplete_task_ids": incomplete,
+                "delivery_assessment": "degraded_or_incomplete" if degraded or incomplete else "not_independently_verified"},
             loaded_skills=loaded, episodes=episodes,
             user_corrections=[], candidate_neighbors=[], protected_skills=[],
             artifact_refs=[f"run:{run_id}"] + [f"task:{item.task_id}" for item in tasks] + [f"event:{item.event_id}" for item in events[-20:]],

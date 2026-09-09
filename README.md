@@ -310,10 +310,13 @@ cp .env.example .env
 
 | 配置 | 说明 |
 |---|---|
-| OPENAI_API_KEY | OpenAI 兼容 API 密钥 |
-| OPENAI_BASE_URL | 模型服务地址 |
-| OPENAI_LLM_MODEL | 生成模型 |
-| OPENAI_EMBEDDINGS_MODEL | 向量模型 |
+| LLM_PROVIDER | 生成服务：`deepseek` 或 `openai` |
+| DEEPSEEK_API_KEY | DeepSeek 密钥 |
+| DEEPSEEK_BASE_URL / DEEPSEEK_MODEL | DeepSeek 地址与生成模型 |
+| EMBEDDING_API_KEY / EMBEDDING_BASE_URL | 独立向量服务的密钥与地址 |
+| EMBEDDING_MODEL / EMBEDDING_DIMENSIONS | 向量模型与维度 |
+| EMBEDDING_REQUEST_BATCH_SIZE | 每次向量 API 请求的文本数，百炼 v4 使用 10 |
+| OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_LLM_MODEL | `LLM_PROVIDER=openai` 时使用，兼容其他 OpenAI 协议服务 |
 | TAVILY_API_KEY | Web 联网模式密钥 |
 | NEO4J_URI / NEO4J_USERNAME / NEO4J_PASSWORD | 私域 GraphRAG |
 | APP_DATABASE_URL | SQLite 数据库地址 |
@@ -321,6 +324,12 @@ cp .env.example .env
 | FRONTEND_PORT | 前端端口，默认 5173 |
 
 完整选项见 [.env.example](.env.example)。
+
+默认配置为 DeepSeek `deepseek-v4-pro` 生成 + 阿里云百炼 `text-embedding-v4` 向量（1024 维）。在 `.env` 分别填写 `DEEPSEEK_API_KEY` 和 `EMBEDDING_API_KEY`，百炼地址须与密钥所属地域一致；如控制台提供业务空间专用地址，请替换 `EMBEDDING_BASE_URL`。修改后重启后端。两家服务使用各自的密钥，不能互换。
+
+`CACHE_EMBEDDING_PROVIDER=openai` 表示使用 OpenAI 兼容协议，实际复用上述向量服务，此配置下请求发往百炼。旧的 `OPENAI_EMBEDDINGS_MODEL`、`OPENAI_EMBEDDING_DIMENSIONS`、`OPENAI_EMBEDDING_BATCH_SIZE` 仍可使用；新的独立向量配置优先。未配置独立向量地址时，旧的共享 OpenAI 地址和密钥仍然生效。
+
+若已有知识库向量或语义缓存，更换向量模型后需要重新生成索引并清理旧的向量缓存；即使维度相同，不同模型的向量也不能混用。
 
 ### 3. Docker 一键启动
 
