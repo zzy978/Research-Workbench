@@ -218,6 +218,36 @@ def build_runtime(database, tmp_path, factory, *, prefix_tracker=None):
     )
 
 
+def test_runtime_recovered_usage_adds_new_tokens():
+    from types import SimpleNamespace
+    from deepresearch_agent.harness.budgets import BudgetUsage
+    runtime = HarnessRuntime.__new__(HarnessRuntime)
+    used = [0]
+    runtime.prefix_tracker = SimpleNamespace(run_snapshot=lambda _: {'totals': {'input_tokens': used[0]}})
+    runtime._usage_offsets = {}
+    context = SimpleNamespace(run_id='resumed', budget_usage=BudgetUsage(llm_tokens=80))
+    runtime._initialize_usage_offset(context)
+    used[0] = 30
+    runtime._attach_prefix_usage(context)
+    runtime._attach_prefix_usage(context)
+    assert context.budget_usage.llm_tokens == 110
+
+
+@pytest.mark.asyncio
+async def test_verification_uses_original_checks_despite_delivery_metadata(database, tmp_path):
+    class PartialDriver(FakeDriver):
+        def delivery_status(self):
+            raise AssertionError('Verification must not use the removed delivery gate')
+    _, run = await create_run(database)
+    runtime = build_runtime(database, tmp_path, lambda context, events: PartialDriver(context))
+    result = await runtime.execute_run(run.run_id)
+    assert result.status == RunStatus.COMPLETED
+    checks = await ContractRepository(database).list_for_run(run.run_id)
+    assert checks
+    assert not {'research_quality', 'delivery_completeness'} & {c.kind for c in checks}
+    assert '尚未完成的事项' not in result.report
+
+
 def test_state_machine_rejects_illegal_and_unverified_completion():
     machine = StateMachine()
     with pytest.raises(InvalidTransition):

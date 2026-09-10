@@ -15,8 +15,9 @@ from deepresearch_agent.config.settings import response_type
 from deepresearch_agent.search.tool.deep_research_tool import DeepResearchTool 
 
 from deepresearch_agent.agents.base import BaseAgent
+from deepresearch_agent.agents.answer_cache import create_uncached_answer_manager
 from deepresearch_agent.harness.contracts import SourceMode
-from deepresearch_agent.retrieval.base import RetrievalProvider
+from deepresearch_agent.retrieval.base import RetrievalProvider, provider_supports_graph
 
 
 class DeepResearchAgent(BaseAgent):
@@ -43,9 +44,12 @@ class DeepResearchAgent(BaseAgent):
             use_deeper_tool: 是否使用增强版研究工具
         """
         # 初始化研究工具
+        if retrieval_provider is None:
+            from deepresearch_agent.retrieval.router import create_default_router
+            retrieval_provider = create_default_router().for_mode(SourceMode.GRAPHRAG)
         self.retrieval_provider = retrieval_provider
         self.run_id = run_id
-        self.use_deeper_tool = bool(use_deeper_tool and (retrieval_provider is None or retrieval_provider.mode == SourceMode.GRAPHRAG))
+        self.use_deeper_tool = bool(use_deeper_tool and provider_supports_graph(retrieval_provider))
         
         if self.use_deeper_tool:
             # 使用增强版研究工具
@@ -88,8 +92,12 @@ class DeepResearchAgent(BaseAgent):
         # 调用父类构造函数
         super().__init__(
             cache_dir=self.cache_dir,
-            enable_vector_cache=False if retrieval_provider is not None and retrieval_provider.mode == SourceMode.WEB else None,
+            memory_only=not provider_supports_graph(retrieval_provider),
+            enable_vector_cache=False if not provider_supports_graph(retrieval_provider) else None,
         )
+        if not provider_supports_graph(retrieval_provider):
+            self.cache_manager = create_uncached_answer_manager()
+            self.global_cache_manager = create_uncached_answer_manager()
     
     def _setup_chains(self):
         """设置处理链 - 由于我们直接使用工具，不需要特别设置"""
@@ -597,8 +605,8 @@ class DeepResearchAgent(BaseAgent):
             str: 状态消息
         """
         # 切换工具
-        if use_deeper and self.retrieval_provider is not None and self.retrieval_provider.mode == SourceMode.WEB:
-            return "Web 信息源不启用知识图谱专用增强工具，继续使用标准 DeepResearch"
+        if use_deeper and not provider_supports_graph(self.retrieval_provider):
+            return "当前检索后端不启用知识图谱专用增强工具，继续使用标准 DeepResearch"
         self.use_deeper_tool = use_deeper
         
         if use_deeper:

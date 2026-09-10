@@ -1,4 +1,6 @@
 import os
+import hashlib
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -519,3 +521,28 @@ MULTI_AGENT_WORKER_MAX_CONCURRENCY = (
 )
 if MULTI_AGENT_WORKER_MAX_CONCURRENCY < 1:
     raise ValueError("MA_WORKER_MAX_CONCURRENCY 必须大于等于 1")
+
+# Private source keeps the historical `graphrag` API value; backend is independent.
+PRIVATE_RETRIEVAL_BACKEND = _get_env_choice("PRIVATE_RETRIEVAL_BACKEND", {"hybrid", "graphrag"}, "hybrid")
+RAG_INDEX_DIR = Path(os.getenv("RAG_INDEX_DIR", PROJECT_ROOT / "data" / "rag_index")).expanduser().resolve()
+RAG_CHUNK_SIZE = _require_positive("RAG_CHUNK_SIZE", _get_env_int("RAG_CHUNK_SIZE", 800))
+RAG_CHUNK_OVERLAP = _get_env_int("RAG_CHUNK_OVERLAP", 120)
+if not 0 <= RAG_CHUNK_OVERLAP < RAG_CHUNK_SIZE:
+    raise ValueError("RAG_CHUNK_OVERLAP 必须在 0 到 RAG_CHUNK_SIZE-1 之间")
+RAG_CANDIDATE_K = _require_positive("RAG_CANDIDATE_K", _get_env_int("RAG_CANDIDATE_K", 30))
+RAG_RERANK_K = _require_positive("RAG_RERANK_K", _get_env_int("RAG_RERANK_K", 20))
+RAG_MIN_RERANK_SCORE = _get_env_float("RAG_MIN_RERANK_SCORE", 0.01)
+if not 0 <= RAG_MIN_RERANK_SCORE <= 1:
+    raise ValueError("RAG_MIN_RERANK_SCORE 必须在 0 到 1 之间")
+RERANKER_MODEL = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3").strip()
+RERANKER_DEVICE = os.getenv("RERANKER_DEVICE", "cpu").strip()
+RERANKER_BATCH_SIZE = _require_positive("RERANKER_BATCH_SIZE", _get_env_int("RERANKER_BATCH_SIZE", 8))
+RERANKER_MAX_LENGTH = _require_positive("RERANKER_MAX_LENGTH", _get_env_int("RERANKER_MAX_LENGTH", 1024))
+if not RERANKER_MODEL:
+    raise ValueError("RERANKER_MODEL 不能为空")
+RAG_EMBEDDING_IDENTITY = hashlib.sha256(json.dumps({
+    "text_normalization": "NFKC",
+    "model": OPENAI_EMBEDDINGS_MODEL,
+    "base_url": EMBEDDING_BASE_URL.rstrip("/"),
+    "dimensions": OPENAI_EMBEDDING_DIMENSIONS,
+}, sort_keys=True).encode("utf-8")).hexdigest()

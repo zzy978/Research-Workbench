@@ -8,6 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend ./backend
 COPY src/deepresearch_agent ./src/deepresearch_agent
 COPY skills ./skills
+COPY build_rag_index.py build_knowledge_graph.py ./
 
 EXPOSE 8000
 CMD ["sh", "-c", "alembic upgrade head && uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --workers 1"]

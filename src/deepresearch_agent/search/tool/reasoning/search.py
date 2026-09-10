@@ -204,8 +204,9 @@ class QueryGenerator:
             followup_query_prompt: 跟进查询提示模板
         """
         self.llm = llm
-        self.sub_query_prompt = sub_query_prompt
-        self.followup_query_prompt = followup_query_prompt
+        from deepresearch_agent.harness.research_quality import RESEARCH_GUIDANCE
+        self.sub_query_prompt = sub_query_prompt + '\n' + RESEARCH_GUIDANCE
+        self.followup_query_prompt = followup_query_prompt + '\n' + RESEARCH_GUIDANCE
     
     def generate_sub_queries(self, original_query: str) -> List[str]:
         """

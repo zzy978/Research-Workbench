@@ -69,7 +69,7 @@ class EvidenceData(BaseModel):
 class ContractCheckData(BaseModel):
     check_id: str
     run_id: str
-    kind: Literal["min_evidence", "source_match", "citation_integrity", "claim_support", "report_consistency", "required_section", "source_diversity", "evidence_card_coverage", "custom"]
+    kind: Literal["min_evidence", "source_match", "citation_integrity", "claim_support", "report_consistency", "required_section", "source_diversity", "evidence_card_coverage", "delivery_completeness", "research_quality", "custom"]
     required: bool = True
     threshold: Optional[float] = None
     verifier: str

@@ -28,7 +28,7 @@ from deepresearch_agent.agents.multi_agent.tools.evidence_tracker import get_evi
 from deepresearch_agent.harness.contracts import SourceMode
 from deepresearch_agent.harness.policies import SourcePolicy
 from deepresearch_agent.harness.evidence import EvidenceLedger
-from deepresearch_agent.retrieval.base import RetrievalProvider, SearchFilters, ToolCallContext, run_async_from_sync
+from deepresearch_agent.retrieval.base import RetrievalProvider, SearchFilters, ToolCallContext, run_async_from_sync, provider_supports_graph
 from deepresearch_agent.retrieval.router import RetrievalRouter, create_default_router
 
 _LOGGER = logging.getLogger(__name__)
@@ -91,6 +91,10 @@ class RetrievalExecutor(BaseExecutor):
         provider = self._provider or self._router.for_mode(state.source_mode)  # type: ignore[union-attr]
         if provider.mode.value != state.source_mode or task.source_mode != state.source_mode:
             raise ValueError("Plan/Task/Provider source_mode 不一致")
+        if provider.mode == SourceMode.GRAPHRAG and not provider_supports_graph(provider) and tool_name in {
+            "local_search", "global_search", "naive_search", "chain_exploration"
+        }:
+            tool_name = "hybrid_search"
         tool_call_id = f"call_{uuid.uuid4().hex}"
         start_time = time.perf_counter()
         success = True
@@ -214,7 +218,7 @@ class RetrievalExecutor(BaseExecutor):
     ) -> Dict[str, Any]:
         from deepresearch_agent.search.tool.deep_research_tool import DeepResearchTool
 
-        if task_type == "deeper_research" and provider.mode == SourceMode.GRAPHRAG:
+        if task_type == "deeper_research" and provider_supports_graph(provider):
             from deepresearch_agent.search.tool.deeper_research_tool import DeeperResearchTool
             tool = DeeperResearchTool(provider=provider, run_id=run_id)
         else:

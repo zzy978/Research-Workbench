@@ -61,6 +61,7 @@ class TimeoutBoundProvider:
         self._timeout_seconds = timeout_seconds
         self.mode = provider.mode
         self.provider_name = provider.provider_name
+        self.supports_graph = provider_supports_graph(provider)
 
     async def search(
         self,
@@ -92,6 +93,11 @@ def ensure_results(value: Sequence[RetrievalResult]) -> list[RetrievalResult]:
     return list(value)
 
 
+def provider_supports_graph(provider: RetrievalProvider | None) -> bool:
+    """Source identity is not a capability: private hybrid RAG has no graph."""
+    return bool(getattr(provider, "supports_graph", False))
+
+
 def run_async_from_sync(awaitable_factory):
     """Run provider coroutines from legacy synchronous entry points."""
     try:
@@ -110,4 +116,5 @@ __all__ = [
     "SourceMode",
     "ToolCallContext",
     "run_async_from_sync",
+    "provider_supports_graph",
 ]

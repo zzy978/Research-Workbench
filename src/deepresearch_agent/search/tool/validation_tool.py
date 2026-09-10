@@ -9,10 +9,10 @@ from deepresearch_agent.search.tool.reasoning.validator import AnswerValidator
 class AnswerValidationTool:
     """
     将AnswerValidator封装成LangChain Tool。
-    默认复用HybridSearchTool的关键词提取能力以评估相关性。
+    默认使用本地关键词提取评估相关性，无需连接知识图谱。
     """
 
-    def __init__(self, *, enable_graph: bool = True):
+    def __init__(self, *, enable_graph: bool = False):
         if enable_graph:
             from deepresearch_agent.search.tool.hybrid_tool import HybridSearchTool
             keyword_tool = HybridSearchTool()

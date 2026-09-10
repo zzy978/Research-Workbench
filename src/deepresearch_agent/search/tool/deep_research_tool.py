@@ -10,6 +10,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 import asyncio
 
 from deepresearch_agent.search.tool.base import BaseSearchTool
+from deepresearch_agent.agents.answer_cache import create_uncached_answer_manager
 from deepresearch_agent.config.prompts import BEGIN_SEARCH_QUERY, BEGIN_SEARCH_RESULT, END_SEARCH_RESULT, MAX_SEARCH_LIMIT, \
     END_SEARCH_QUERY, RELEVANT_EXTRACTION_PROMPT, SUB_QUERY_PROMPT, FOLLOWUP_QUERY_PROMPT, FINAL_ANSWER_PROMPT
 from deepresearch_agent.search.tool.reasoning.nlp import extract_between
@@ -17,9 +18,10 @@ from deepresearch_agent.search.tool.reasoning.prompts import kb_prompt
 from deepresearch_agent.search.tool.reasoning.thinking import ThinkingEngine
 from deepresearch_agent.search.tool.reasoning.validator import AnswerValidator
 from deepresearch_agent.search.tool.reasoning.search import DualPathSearcher, QueryGenerator
+from deepresearch_agent.harness.research_quality import RESEARCH_GUIDANCE, SearchProgress, search_budget_exhausted
 from deepresearch_agent.config.settings import KB_NAME
 from deepresearch_agent.harness.contracts import SourceMode
-from deepresearch_agent.retrieval.base import RetrievalProvider, SearchFilters, ToolCallContext, run_async_from_sync
+from deepresearch_agent.retrieval.base import RetrievalProvider, SearchFilters, ToolCallContext, run_async_from_sync, provider_supports_graph
 
 
 class DeepResearchTool(BaseSearchTool):
@@ -36,11 +38,17 @@ class DeepResearchTool(BaseSearchTool):
     
     def __init__(self, provider: Optional[RetrievalProvider] = None, *, run_id: Optional[str] = None):
         """初始化深度研究工具"""
+        if provider is None:
+            from deepresearch_agent.retrieval.router import create_default_router
+            provider = create_default_router().for_mode(SourceMode.GRAPHRAG)
+        supports_graph = provider_supports_graph(provider)
         super().__init__(
             cache_dir="./cache/deep_research",
-            enable_graph=not (provider is not None and provider.mode == SourceMode.WEB),
-            enable_vector_cache=False if provider is not None and provider.mode == SourceMode.WEB else None,
+            enable_graph=supports_graph,
+            enable_vector_cache=False if not supports_graph else None,
         )
+        if not supports_graph:
+            self.cache_manager = create_uncached_answer_manager()
         self.retrieval_provider = provider
         self.run_id = run_id or f"legacy_{uuid.uuid4().hex}"
         self.provider_results = []
@@ -50,8 +58,8 @@ class DeepResearchTool(BaseSearchTool):
         # 关键词缓存
         self._keywords_cache = {}
         
-        # Web Run 不实例化任何 GraphRAG 工具，避免私有源连接和隐式降级。
-        if provider is not None and provider.mode == SourceMode.WEB:
+        # 仅具备图能力的 Provider 初始化图专用工具。
+        if not supports_graph:
             self.hybrid_tool = None
             self.global_tool = None
             self.local_tool = None
@@ -398,7 +406,7 @@ class DeepResearchTool(BaseSearchTool):
                 query=query,
                 retrieved_content=retrieved_content,
                 thinking_process=thinking_process
-            ))
+            ) + '\n' + RESEARCH_GUIDANCE)
             
             answer = response.content if hasattr(response, 'content') else str(response)
             
@@ -544,7 +552,12 @@ class DeepResearchTool(BaseSearchTool):
         think += initial_thinking
         
         # 迭代思考过程
+        search_progress = SearchProgress()
+        self.search_stop_reason = None
         for iteration in range(self.max_iterations):
+            if search_budget_exhausted():
+                self.search_stop_reason = 'report_budget_reserved'
+                break
             self._log(f"\n[深度研究] 开始第{iteration + 1}轮迭代")
             
             # range(max_iterations) bounds search rounds; do not reserve the last round for synthesis.
@@ -618,6 +631,9 @@ class DeepResearchTool(BaseSearchTool):
             
             # 处理每个搜索查询
             for search_query in queries_to_process:
+                if search_budget_exhausted():
+                    self.search_stop_reason = 'report_budget_reserved'
+                    break
                 self._log(f"\n[深度研究] 执行查询: {search_query}")
                 
                 # 检查是否已执行过相同查询
@@ -692,6 +708,11 @@ class DeepResearchTool(BaseSearchTool):
                 self.thinking_engine.add_human_message(f"\n{BEGIN_SEARCH_RESULT}{summary_think}{END_SEARCH_RESULT}\n")
                 think += self.thinking_engine.remove_result_tags(summary_think)
             
+            if self.search_stop_reason == 'report_budget_reserved':
+                break
+            if search_progress.exhausted(self.provider_results):
+                self.search_stop_reason = 'no_new_evidence'
+                break
             # 在每轮迭代结束后，如果已有足够信息，使用QueryGenerator评估是否需要继续搜索
             if iteration > 0 and self.all_retrieved_info:
                 # 类似于DeepSearch中的_generate_gap_queries方法
@@ -881,7 +902,12 @@ class DeepResearchTool(BaseSearchTool):
         yield initial_thinking
         
         # 迭代思考过程
+        search_progress = SearchProgress()
+        self.search_stop_reason = None
         for iteration in range(self.max_iterations):
+            if search_budget_exhausted():
+                self.search_stop_reason = 'report_budget_reserved'
+                break
             # 发送迭代进度
             if iteration > 0:
                 yield f"\n\n**正在进行第{iteration + 1}轮思考**...\n\n"
@@ -1001,6 +1027,9 @@ class DeepResearchTool(BaseSearchTool):
             
             # 处理每个搜索查询
             for search_query in queries_to_process:
+                if search_budget_exhausted():
+                    self.search_stop_reason = 'report_budget_reserved'
+                    break
                 search_start_msg = f"\n**正在搜索: {search_query}**\n"
                 self._log(search_start_msg)
                 yield search_start_msg
@@ -1113,6 +1142,12 @@ class DeepResearchTool(BaseSearchTool):
             
             # 本轮迭代结束：上报聚合进度事件
             await self._progress("iteration_done", iteration_index=iteration)
+
+            if self.search_stop_reason == 'report_budget_reserved':
+                break
+            if search_progress.exhausted(self.provider_results):
+                self.search_stop_reason = 'no_new_evidence'
+                break
 
             # 在每轮迭代结束后，评估是否需要继续搜索
             if iteration > 0 and self.all_retrieved_info:

@@ -4,6 +4,7 @@
 根据 PlanExecutionSignal 调度不同类型的 Worker 执行任务，支持串行与并行模式。
 """
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from contextvars import copy_context
 from typing import Callable, Dict, List, Optional, Tuple
 import logging
 
@@ -96,6 +97,7 @@ class WorkerCoordinator:
         if effective_mode == "parallel":
             results = self._execute_parallel(
                 state, signal, task_map, progress_callback=progress_callback,
+                stop_predicate=stop_predicate,
             )
         else:
             results = self._execute_sequential(
@@ -188,6 +190,7 @@ class WorkerCoordinator:
         signal: PlanExecutionSignal,
         task_map: Dict[str, TaskNode],
         *,
+        stop_predicate: Optional[Callable[[], bool]] = None,
         progress_callback: Optional[Callable[[str, TaskNode, Optional[ExecutionRecord]], None]] = None,
     ) -> List[ExecutionRecord]:
         results: List[ExecutionRecord] = []
@@ -208,8 +211,13 @@ class WorkerCoordinator:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             while pending or inflight:
                 scheduled_this_round = False
+                if stop_predicate is not None and stop_predicate():
+                    pending.clear()
 
                 for task_id in list(pending):
+                    if stop_predicate is not None and stop_predicate():
+                        pending.clear()
+                        break
                     if len(inflight) >= max_workers:
                         break
 
@@ -224,7 +232,7 @@ class WorkerCoordinator:
                         if progress_callback is not None:
                             progress_callback("task.started", task, None)
                         future = executor.submit(
-                            self._execute_isolated_task,
+                            copy_context().run, self._execute_isolated_task,
                             shared_state=state,
                             signal=signal,
                             task=task,

@@ -11,6 +11,9 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 
 from deepresearch_agent.config.prompts import TASK_DECOMPOSE_PROMPT
+from deepresearch_agent.config.prompts.planner_prompts import HYBRID_TASK_DECOMPOSE_PROMPT
+from deepresearch_agent.config import settings
+from deepresearch_agent.harness.research_quality import RESEARCH_GUIDANCE
 from deepresearch_agent.models.get_models import get_llm_model
 from deepresearch_agent.agents.multi_agent.core.plan_spec import (
     TaskGraph,
@@ -57,10 +60,14 @@ class TaskDecomposer:
         返回:
             TaskDecompositionResult
         """
-        prompt = TASK_DECOMPOSE_PROMPT.format(
+        template = (HYBRID_TASK_DECOMPOSE_PROMPT
+                    if source_mode == "graphrag" and settings.PRIVATE_RETRIEVAL_BACKEND == "hybrid"
+                    else TASK_DECOMPOSE_PROMPT)
+        prompt = template.format(
             query=query,
             max_tasks=self._max_tasks,
         )
+        prompt += '\n' + RESEARCH_GUIDANCE
         if source_mode == "web":
             prompt += (
                 "\n\n【不可覆盖的信息源约束】本 Run 的 source_mode=web。"
@@ -70,7 +77,7 @@ class TaskDecomposer:
         else:
             prompt += (
                 "\n\n【不可覆盖的信息源约束】本 Run 的 source_mode=graphrag。"
-                "禁止生成 web_search；检索只能使用私有知识图谱工具。"
+                "禁止生成 web_search；检索只能使用当前私有库后端支持的工具。"
             )
 
         _LOGGER.debug("TaskDecomposer prompt: %s", prompt)
@@ -121,8 +128,13 @@ class TaskDecomposer:
                 "local_search", "global_search", "hybrid_search", "naive_search", "chain_exploration"
             }:
                 task_type = "web_search"
-            elif source_mode == "graphrag" and task_type == "web_search":
+            elif source_mode == "graphrag" and (
+                task_type == "web_search" or (settings.PRIVATE_RETRIEVAL_BACKEND == "hybrid"
+                and task_type in {"local_search", "global_search", "naive_search", "chain_exploration"})
+            ):
                 task_type = "hybrid_search"
+            elif source_mode == "graphrag" and settings.PRIVATE_RETRIEVAL_BACKEND == "hybrid" and task_type == "deeper_research":
+                task_type = "deep_research"
             if task_type not in _ALLOWED_TASK_TYPES:
                 original_type = task_type
                 task_type = "custom"

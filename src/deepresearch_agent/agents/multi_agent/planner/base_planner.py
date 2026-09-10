@@ -3,6 +3,7 @@ Planner编排基类
 
 整合Clarifier、TaskDecomposer、PlanReviewer，输出结构化的PlanSpec
 """
+from deepresearch_agent.config import settings
 from typing import Optional, List, Set
 from datetime import datetime
 import logging
@@ -212,7 +213,9 @@ class BasePlanner:
     def _simple_plan(state: PlanExecuteState, context: PlanContext, assumptions: List[str]) -> Optional[PlanSpec]:
         """Use one bounded retrieval task for short, explicit summary/list questions."""
         query = (context.refined_query or context.original_query or "").strip()
-        markers = ("概括", "总结", "要点", "列出", "是什么", "简述", "summarize", "list ", "what is")
+        if any(marker in query.lower() for marker in ('是否', '应该', '值得', '推荐', '适合', '比较', '取舍', 'should ', 'recommend', 'compare')):
+            return None
+        markers = ("概括", "总结", "要点", "列出", "是什么", "简述", "介绍", "summarize", "list ", "what is")
         if len(query) > 160 or not any(marker in query.lower() for marker in markers):
             return None
         task_type = "web_search" if state.source_mode == "web" else "hybrid_search"
@@ -242,8 +245,13 @@ class BasePlanner:
                 continue
             if source_mode == "web" and node.task_type in graph_types:
                 node.task_type = "web_search"  # type: ignore[assignment]
-            elif source_mode == "graphrag" and node.task_type == "web_search":
+            elif source_mode == "graphrag" and (
+                node.task_type == "web_search" or (settings.PRIVATE_RETRIEVAL_BACKEND == "hybrid"
+                and node.task_type in graph_types)
+            ):
                 node.task_type = "hybrid_search"  # type: ignore[assignment]
+            elif source_mode == "graphrag" and settings.PRIVATE_RETRIEVAL_BACKEND == "hybrid" and node.task_type == "deeper_research":
+                node.task_type = "deep_research"
 
     def _ensure_reflection_task(self, plan_spec: Optional[PlanSpec]) -> None:
         """

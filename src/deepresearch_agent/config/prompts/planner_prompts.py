@@ -209,6 +209,11 @@ PLAN_REVIEW_PROMPT = '''你是一个计划审校助手。你的职责是审核�
 2. **验收标准(AcceptanceCriteria)**: 定义任务完成的标准
 3. **审校意见**: 指出潜在问题并给出修改建议
 
+**审校意见字段格式（必须遵守）**:
+- `validation_results.issues` 和 `validation_results.suggestions` 必须是字符串数组，每个元素必须是字符串，不能是对象、数组或 null。
+- 针对任务的意见将任务 ID 写入字符串，例如 `"task_001：缺少必要的用户背景条件"`；全局意见例如 `"global：补充覆盖用户要求的验收条件"`。
+- 没有问题或建议时输出空数组 `[]`。
+
 **示例输出**:
 ```json
 {{
@@ -248,4 +253,14 @@ PLAN_REVIEW_PROMPT = '''你是一个计划审校助手。你的职责是审核�
 
 **PlanSpec**:
 ```json
+'''
+
+
+HYBRID_TASK_DECOMPOSE_PROMPT = '''你是一个任务规划助手，将问题拆分为可执行的原文证据检索任务。
+用户查询：{query}
+最大任务数：{max_tasks}
+可用任务类型：hybrid_search（对私有文档进行向量、BM25 混合检索与重排）；deep_research（通过多轮混合检索调查复杂子问题）；reflection（校验证据和答案）。
+单次检索使用 hybrid_search，确需追问和多轮调查时使用 deep_research。按问题的事实、机制和对比维度拆分，避免重复检索。不使用实体图、社区或图路径探索工具。
+每个任务提供 task_id、task_type、description、priority（1 至 3）、estimated_tokens、depends_on、entities、status（pending）。
+仅输出 JSON 对象，包含 nodes 数组及 execution_mode（sequential、parallel 或 adaptive）。
 '''

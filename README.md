@@ -21,7 +21,7 @@
   <a href="#常用-api">API</a>
 </p>
 
-> 以可恢复的 **Agent Harness** 为运行底座，驱动 **Context → Plan → Execute → Report → Verify → Replan** 闭环，统一接入私域 GraphRAG 与 Web 搜索，并提供全量证据上下文压缩、持久化执行、实时可观测、受控自进化和系统化 Agent 评测能力。
+> 以可恢复的 **Agent Harness** 为运行底座，驱动 **Context → Plan → Execute → Report → Verify → Replan** 闭环，统一接入私域混合 RAG 与 Web 搜索，并提供全量证据上下文压缩、持久化执行、实时可观测、受控自进化和系统化 Agent 评测能力。
 
 系统关注的不只是“生成一篇报告”，而是让长时间、多步骤、强证据约束的 Agent 任务能够可靠执行、失败恢复、过程审计、结果验证和持续演进。
 
@@ -31,7 +31,7 @@
 
 ### 1. 可恢复 Agent Harness
 
-Harness Runtime 将 DeepResearch、Fusion 和多智能体 Plan–Execute–Report 工作流统一封装为持久化执行协议：
+Harness Runtime 将 DeepResearch 和多智能体 Plan–Execute–Report 工作流统一封装为持久化执行协议：
 
 - Session / Run 状态机管理会话与单次研究任务；
 - Lease、版本化 Checkpoint 和幂等 ToolCall 防止重复副作用；
@@ -232,10 +232,12 @@ flowchart TB
     subgraph DATA["Evidence & Data Plane"]
         direction LR
         WEB[(Tavily Web)]
-        GRAPH[(Neo4j GraphRAG)]
+        PRIVATE[Private Retrieval]
+        GRAPH[(Optional Neo4j GraphRAG)]
         SQL[(SQLite)]
         ART[(Artifact Store)]
-        VECTOR[(Faiss / Embeddings)]
+        VECTOR[(NumPy Cosine + BM25)]
+        RERANK[Local Reranker]
     end
 
     UI -->|REST / SSE| API
@@ -243,10 +245,12 @@ flowchart TB
     HARNESS --> RESEARCH
     HARNESS --> CONTEXT
     WORK --> WEB
-    WORK --> GRAPH
+    WORK --> PRIVATE
+    PRIVATE -->|hybrid default| VECTOR
+    VECTOR --> RERANK
+    PRIVATE -->|explicit legacy mode| GRAPH
     REPORT --> ART
     HARNESS <--> SQL
-    GRAPH <--> VECTOR
     REPORT --> OBS
     OBS --> GOVERNANCE
 
@@ -260,23 +264,22 @@ flowchart TB
     class SESSION,SCHED,EVENT,EVALAPI control;
     class CORE,RELIABILITY,GOVERNANCE,OBS runtime;
     class PLAN,WORK,REFLECT,REPORT,CTX,MEMORY,RECALL,SKILLS,EVOLVE agent;
-    class WEB,GRAPH,SQL,ART,VECTOR data;
+    class WEB,PRIVATE,GRAPH,SQL,ART,VECTOR,RERANK data;
 ~~~
 
 ## 信息源与研究工作流
 
 每个 Run 冻结一种信息源，禁止执行过程中跨源污染：
 
-- **graphrag**：私域文档、Chunk 向量检索、实体关系图和 Community 全局检索；
+- **graphrag**：私域信息源的兼容 API 名称。默认 `PRIVATE_RETRIEVAL_BACKEND=hybrid`，使用文档分块、NumPy 精确余弦向量检索与 BM25 关键词召回、融合及本地 Reranker 重排；面向小中规模本地语料。显式切换 `graphrag` 后端才使用旧 Neo4j 实体关系图与 Community 检索；
 - **web**：Tavily 联网搜索；
 - Memory 与历史对话仅用于理解问题，不可充当本轮研究证据。
 
-支持三种工作流：
+API 支持两种研究工作流；检索后端选择与工作流选择相互独立：
 
 | 工作流 | 适用场景 |
 |---|---|
 | deep_research | 多轮搜索、推理和答案生成 |
-| fusion | 多检索策略融合 |
 | plan_execute_report | DAG 规划、多 Agent 执行、长报告生成与完成验证 |
 
 ## 技术栈
@@ -285,7 +288,7 @@ flowchart TB
 |---|---|
 | Agent / LLM | LangChain、LangGraph、OpenAI-compatible API |
 | Harness | Python、Pydantic、异步状态机、Durable Event、Checkpoint |
-| Retrieval | Tavily、Neo4j 5.22、APOC、GDS、Faiss、SentenceTransformers |
+| Retrieval | NumPy 精确余弦、BM25、SentenceTransformers 本地重排、Tavily；旧模式使用 Neo4j / APOC / GDS |
 | Backend | FastAPI、SSE、SQLAlchemy、SQLite、Alembic |
 | Frontend | React 18、TypeScript、Vite、TanStack Query、Motion |
 | Deployment | Docker Compose、Nginx、Uvicorn |
@@ -298,7 +301,7 @@ flowchart TB
 
 - Python 3.10 或 3.11
 - Node.js 20 LTS
-- Docker Desktop
+- Docker Desktop（仅 Docker 部署或旧 Neo4j 模式需要）
 
 ### 2. 配置
 
@@ -318,7 +321,14 @@ cp .env.example .env
 | EMBEDDING_REQUEST_BATCH_SIZE | 每次向量 API 请求的文本数，百炼 v4 使用 10 |
 | OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_LLM_MODEL | `LLM_PROVIDER=openai` 时使用，兼容其他 OpenAI 协议服务 |
 | TAVILY_API_KEY | Web 联网模式密钥 |
-| NEO4J_URI / NEO4J_USERNAME / NEO4J_PASSWORD | 私域 GraphRAG |
+| PRIVATE_RETRIEVAL_BACKEND | 私域后端，默认 `hybrid`；`graphrag` 启用旧图检索 |
+| RAG_INDEX_DIR | 私域索引目录，默认 `./data/rag_index` |
+| RAG_CHUNK_SIZE / RAG_CHUNK_OVERLAP | 新索引分块大小与重叠字符数，默认 800 / 120 |
+| RAG_CANDIDATE_K / RAG_RERANK_K | 单路召回数量 / 进入重排的融合候选数量，默认 30 / 20 |
+| RAG_MIN_RERANK_SCORE | 最低重排分，默认 0.01；过滤很弱的匹配。更换模型后需重新校准，设为 0 可进行不设阈值的对照 |
+| RERANKER_MODEL | 重排模型名称或本地目录，默认 `BAAI/bge-reranker-v2-m3` |
+| RERANKER_DEVICE / RERANKER_BATCH_SIZE / RERANKER_MAX_LENGTH | 重排设备、批次与文本长度上限，默认 cpu / 8 / 1024 |
+| NEO4J_URI / NEO4J_USERNAME / NEO4J_PASSWORD | 仅旧 GraphRAG 模式需要 |
 | APP_DATABASE_URL | SQLite 数据库地址 |
 | RUN_MAX_LLM_TOKENS / RUN_WALL_TIME_SECONDS | Harness 预算 |
 | FRONTEND_PORT | 前端端口，默认 5173 |
@@ -331,17 +341,27 @@ cp .env.example .env
 
 若已有知识库向量或语义缓存，更换向量模型后需要重新生成索引并清理旧的向量缓存；即使维度相同，不同模型的向量也不能混用。
 
-### 3. Docker 一键启动
+### 3. Docker 启动
 
 ~~~powershell
 docker compose up -d --build
 ~~~
 
+默认启动前后端，不需要 Neo4j 或 Neo4j 密码。将文档放入 `files/` 后，在运行中的后端容器里建库并预热本地重排模型：
+
+~~~powershell
+docker compose exec backend python build_rag_index.py --files /app/files --index-dir /app/data/rag_index
+docker compose exec backend python build_rag_index.py --prepare-reranker
+~~~
+
+Docker 中保持 `RAG_INDEX_DIR = ./data/rag_index`（或 `/app/data/rag_index`）；不要填 Windows 主机路径。本地文档、索引与模型缓存分别通过 `files/`、`data/`、`cache/` 挂载保存，更新文档后重新执行建库命令。
+
 访问：
 
 - 前端：http://127.0.0.1:5173
 - API：http://127.0.0.1:8000
-- Neo4j Browser：http://127.0.0.1:7474
+
+旧图模式需要在 `.env` 设置 `PRIVATE_RETRIEVAL_BACKEND = graphrag` 和有效的 `NEO4J_PASSWORD`，再运行 `docker compose --profile graph up -d --build`。仅此模式提供 Neo4j Browser：http://127.0.0.1:7474。更新旧图时可执行 `docker compose exec backend python build_knowledge_graph.py`。
 
 若前端端口冲突：
 
@@ -359,8 +379,12 @@ pip install -r requirements.txt
 
 $env:PYTHONPATH = "$PWD\src"
 python -m alembic upgrade head
-python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --workers 1
+python -m backend.server
 ~~~
+
+日常启动后端使用 `.\.venv\Scripts\python.exe -m backend.server`，无需重复安装依赖。
+按一次 Ctrl+C 后，后端最多等待现有 HTTP 连接 5 秒，再取消未结束的请求并清理后台任务和数据库。
+若直接使用 Uvicorn CLI，必须附带 `--timeout-graceful-shutdown 5`，否则默认无限等待连接退出。
 
 另开终端启动前端：
 
@@ -376,6 +400,37 @@ npm run dev
 .\scripts\start-local.ps1
 .\scripts\stop-local.ps1
 ~~~
+
+本地启动脚本优先使用 `.venv\Scripts\python.exe`，未创建项目虚拟环境时才使用 PATH 中的 `python`。脚本读取 `.env` 的私域后端配置：默认 Hybrid 不调用 Docker；旧 `graphrag` 模式启动 Neo4j。已有外部 Neo4j 服务时可使用 `.\scripts\start-local.ps1 -SkipNeo4j`。
+
+### 5. 建立私域文档索引
+
+将原始文档放入 `files/`，在项目根目录执行一次建库；文档更新后再运行以发布新索引：
+
+~~~powershell
+.venv/Scripts/python.exe build_rag_index.py --files ./files --index-dir ./data/rag_index
+~~~
+
+索引复用已有的 `EMBEDDING_API_KEY`、`EMBEDDING_BASE_URL`、`EMBEDDING_MODEL` 和维度配置，无需另配向量服务。建库会向所配置的 Embedding 服务发送文档分块；检索时会发送查询文本。请使建库的 `--index-dir` 与服务的 `RAG_INDEX_DIR` 保持一致。
+
+默认重排模型为 `BAAI/bge-reranker-v2-m3`，在本机推理，无需 Reranker API 密钥。首次下载模型权重需要网络，重排过程不向模型下载服务发送原文。可提前下载并加载模型：
+
+~~~powershell
+.venv/Scripts/python.exe build_rag_index.py --prepare-reranker
+~~~
+
+若已有本地模型目录，在 `.env` 中独立设置 `RERANKER_MODEL = D:/models/bge-reranker-v2-m3`；生成模型与 Embedding 配置无需因此改变。默认 CPU 推理可通过 `RERANKER_DEVICE` 调整，设备必须受本机 PyTorch 支持。
+
+本地向量检索采用 NumPy 精确余弦，适用于小到中等规模语料；大型语料需另行评估索引内存与召回延迟。CPU 重排可能需要数十秒，`RAG_RERANK_K` 控制每次推理的候选数；增大候选数前应检查 `RUN_TOOL_TIMEOUT_SECONDS`。重排分仅用于排序和阈值筛选，不是事实正确性的概率。
+
+新流程为：原始文档 → 分块 → Embedding 与本地索引 → 向量 / BM25 双路召回 → 融合 → 本地重排 → 可引用证据。现有 Neo4j 图谱可以保留；新 RAG 索引不会自动迁移图中的数据，必须从原始 `files/` 文档重新构建。切换回旧图检索时，设置 `PRIVATE_RETRIEVAL_BACKEND = graphrag`，配置并启动 Neo4j；只有需要构建或更新旧图时才运行：
+
+~~~powershell
+$env:PRIVATE_RETRIEVAL_BACKEND = "graphrag"
+.venv/Scripts/python.exe build_knowledge_graph.py
+~~~
+
+修改配置后重启后端。API 的私域 `source_mode` 继续使用 `graphrag`，无需修改已有调用。`/api/v1/capabilities` 会给出实际 `backend`；Hybrid 可用性只表示配置、索引清单与快照文件检查通过，不代表 Embedding API 已连通或重排模型已成功加载。`/api/v1/health` 同样不会为 Hybrid 探测 Neo4j，也不进行真实模型推理。
 
 ---
 
@@ -414,6 +469,7 @@ python scripts/evaluate_runs.py --labels evals/system/cases.json --retrieval-k 1
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | /api/v1/health | 系统与依赖健康检查 |
+| GET | /api/v1/capabilities | 信息源可用性、私域实际后端与检查级别 |
 | POST/GET | /api/v1/sessions | 创建或查询会话 |
 | POST | /api/v1/sessions/{id}/messages | 发送消息并创建 Run |
 | GET | /api/v1/sessions/{id}/whiteboard | 全链路白板日志 |
@@ -445,7 +501,7 @@ python scripts/evaluate_runs.py --labels evals/system/cases.json --retrieval-k 1
 │   ├── evolution/                   # Skill 蒸馏、评测、Promote、回滚
 │   ├── evaluation/                  # Agent 与检索评测
 │   ├── persistence/                 # SQLite、Repository、Artifact、Migration
-│   ├── retrieval/                   # GraphRAG / Web Provider
+│   ├── retrieval/                   # Hybrid RAG / 旧 GraphRAG / Web Provider
 │   ├── graph/                       # 知识图谱构建与 Community
 │   └── search/                      # DeepResearch 检索工具
 ├── tests/                           # Harness、API、Memory、Evolution、E2E
@@ -454,6 +510,7 @@ python scripts/evaluate_runs.py --labels evals/system/cases.json --retrieval-k 1
 ├── skills/                          # 版本化 Skill 内容
 ├── scripts/                         # 启停、评测和真实链路脚本
 ├── data/                            # SQLite 与 Artifact 运行数据
+├── build_rag_index.py               # 从原始文档构建私域混合检索索引
 └── docker-compose.yaml
 ~~~
 

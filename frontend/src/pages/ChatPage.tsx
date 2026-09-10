@@ -82,7 +82,7 @@ function ExecCard({ feed, run }: {feed: StageFeed; run: Run | null}) {
   const toolPct = usage?.tool_calls && limits?.max_tool_calls ? Math.min(100, Math.round((usage.tool_calls / limits.max_tool_calls) * 100)) : 0;
   const cachePct = cacheHitRate(usage?.prefix_cache_hit_tokens, usage?.prefix_cache_miss_tokens);
 
-  const executionSummary = run?.status === "failed"
+  const executionSummary = run?.error_code === 'QUALITY_REVIEW_ERROR' ? '内容审查发生技术错误，报告已保留' : run?.error_code === 'REPORT_PARTIAL' ? '报告部分完成，请查看未完成事项' : run?.status === "failed"
     ? ["NO_SOURCE_EVIDENCE", "INSUFFICIENT_SOURCE_EVIDENCE"].includes(run.error_code ?? "")
       ? "私域资料不足，研究已停止"
       : "研究执行失败"
@@ -291,7 +291,7 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
         return <CardSummary lines={lines} />;
       }
       case "completed": return <CardSummary
-        lines={[feed.verifyFailures.length === 0 ? "全部验证通过，研究完成" : "研究结束"]}
+        lines={[run?.error_code === 'REPORT_PARTIAL' ? '报告部分完成' : run?.status === 'completed' && feed.verifyFailures.length === 0 ? "全部验证通过，研究完成" : "研究结束"]}
         meta={`证据 ${feed.contextCount} · 工具 ${run?.usage?.usage?.tool_calls ?? feed.tools.length}`}
       />;
     }

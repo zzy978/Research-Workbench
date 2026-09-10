@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Callable, Mapping
+import threading
 
 from deepresearch_agent.harness.contracts import SourceMode
 from deepresearch_agent.harness.errors import AppError, ErrorCode
@@ -43,12 +44,15 @@ class _LazyProvider:
     ) -> None:
         self.mode = mode
         self.provider_name = provider_name
+        self.supports_graph = provider_name == "graphrag"
         self._factory = factory
         self._instance: RetrievalProvider | None = None
+        self._lock = threading.Lock()
 
     def _get(self) -> RetrievalProvider:
-        if self._instance is None:
-            self._instance = self._factory()
+        with self._lock:
+            if self._instance is None:
+                self._instance = self._factory()
         return self._instance
 
     async def search(self, *args, **kwargs):
@@ -59,7 +63,7 @@ __all__ = ["RetrievalRouter"]
 
 
 def create_default_router() -> RetrievalRouter:
-    """Build lazy GraphRAG and configured Tavily providers for real entry points."""
+    """Select hybrid by default; legacy GraphRAG is an explicit backend choice."""
     from deepresearch_agent.config.settings import (
         ARTIFACT_ROOT,
         TAVILY_API_KEY,
@@ -67,16 +71,21 @@ def create_default_router() -> RetrievalRouter:
         TAVILY_MAX_RESULTS,
         TAVILY_SEARCH_DEPTH,
         TAVILY_TIMEOUT_SECONDS,
+        PRIVATE_RETRIEVAL_BACKEND,
     )
     def build_graphrag() -> RetrievalProvider:
         from deepresearch_agent.retrieval.graphrag_provider import GraphRAGProvider
         return GraphRAGProvider()
 
+    def build_hybrid() -> RetrievalProvider:
+        from deepresearch_agent.retrieval.hybrid_provider import create_hybrid_provider
+        return create_hybrid_provider()
+
     providers: dict[SourceMode, RetrievalProvider] = {
         SourceMode.GRAPHRAG: _LazyProvider(
             mode=SourceMode.GRAPHRAG,
-            provider_name="graphrag",
-            factory=build_graphrag,
+            provider_name="graphrag" if PRIVATE_RETRIEVAL_BACKEND == "graphrag" else "hybrid_rag",
+            factory=build_graphrag if PRIVATE_RETRIEVAL_BACKEND == "graphrag" else build_hybrid,
         )
     }
     if TAVILY_API_KEY:

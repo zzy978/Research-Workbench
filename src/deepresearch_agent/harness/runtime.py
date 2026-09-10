@@ -18,9 +18,9 @@ from deepresearch_agent.harness.recovery import classify_exception, classify_ver
 from deepresearch_agent.harness.run_context import RunContext
 from deepresearch_agent.harness.state_machine import StateMachine
 from deepresearch_agent.context.artifact_edit import ArtifactEditContextBuilder
-from deepresearch_agent.config.settings import REPORT_RESERVED_TOKENS, VERIFICATION_RESERVED_TOKENS
 from deepresearch_agent.models.prefix_cache import set_current_run
 from deepresearch_agent.harness.report_safety import sanitize_report
+from deepresearch_agent.harness.research_quality import stage_reserves
 from deepresearch_agent.persistence.artifact_store import ArtifactStore
 from deepresearch_agent.persistence.repositories import (
     ArtifactRepository, CheckpointRepository, ContractRepository, EventRepository,
@@ -52,6 +52,7 @@ class HarnessRuntime:
         lease_seconds: int = 90,
     ):
         self.runs = run_repository
+        self._usage_offsets = {}
         self.messages = message_repository
         self.events = event_bus or EventBus(event_repository)
         self.checkpoints = CheckpointManager(checkpoint_repository)
@@ -81,7 +82,13 @@ class HarnessRuntime:
         context.budget_usage.prefix_cache_hit_tokens = int(totals.get("hit_tokens", 0))
         context.budget_usage.prefix_cache_miss_tokens = int(totals.get("miss_tokens", 0))
         reported_tokens = int(totals.get("input_tokens", 0)) + int(totals.get("output_tokens", 0))
-        context.budget_usage.llm_tokens = max(context.budget_usage.llm_tokens, reported_tokens)
+        context.budget_usage.llm_tokens = max(context.budget_usage.llm_tokens, reported_tokens + self._usage_offsets.get(context.run_id, 0))
+
+    def _initialize_usage_offset(self, context):
+        totals = ((self.prefix_tracker.run_snapshot(context.run_id) or {}).get('totals', {})
+                  if self.prefix_tracker is not None else {})
+        tracked = int(totals.get('input_tokens', 0)) + int(totals.get('output_tokens', 0))
+        self._usage_offsets[context.run_id] = max(0, context.budget_usage.llm_tokens - tracked)
 
     async def execute_run(self, run_id: str) -> RunContext:
         owner = f"harness-{uuid.uuid4().hex}"
@@ -92,6 +99,7 @@ class HarnessRuntime:
         set_current_run(run_id)
         try:
             context = await self._load_context(run_id)
+            self._initialize_usage_offset(context)
             if context.status in {RunStatus.INTERRUPTED, RunStatus.PAUSED}:
                 resume_target = context.resume_from_status or RunStatus.QUEUED
                 context.resume_from_status = None
@@ -269,6 +277,7 @@ class HarnessRuntime:
                         await self.checkpoints.save(context, "failed")
                         continue
                     await self.checkpoints.save(context, "executing")
+                    report_reserve, verification_reserve = stage_reserves(budget.limits.max_llm_tokens)
                     remaining_tokens = max(
                         0,
                         budget.limits.max_llm_tokens - budget.usage.llm_tokens,
@@ -279,10 +288,10 @@ class HarnessRuntime:
                         stage="executing",
                         payload={
                             "remaining_tokens": remaining_tokens,
-                            "report_reserved_tokens": REPORT_RESERVED_TOKENS,
-                            "verification_reserved_tokens": VERIFICATION_RESERVED_TOKENS,
+                            "report_reserved_tokens": report_reserve,
+                            "verification_reserved_tokens": verification_reserve,
                             "reserved_budget_fallback": remaining_tokens < (
-                                REPORT_RESERVED_TOKENS + VERIFICATION_RESERVED_TOKENS
+                                report_reserve + verification_reserve
                             ),
                         },
                     )

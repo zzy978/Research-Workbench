@@ -132,7 +132,8 @@ class SectionWriter:
                 evidence_list=evidence_list_text + ("\n\n" + context_instruction if context_instruction else "")
             )
 
-            generated = self._invoke_llm(prompt)
+            from deepresearch_agent.harness.research_quality import RESEARCH_GUIDANCE
+            generated = self._invoke_llm(prompt + '\n' + RESEARCH_GUIDANCE)
             contents.append(generated.strip())
             used_ids.extend([item.result_id for item in batch])
 

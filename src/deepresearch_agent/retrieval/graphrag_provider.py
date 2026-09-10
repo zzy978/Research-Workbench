@@ -14,6 +14,7 @@ from deepresearch_agent.retrieval.base import SearchDepth, SearchFilters, ToolCa
 
 
 class GraphRAGProvider:
+    supports_graph = True
     mode = SourceMode.GRAPHRAG
     provider_name = "graphrag"
     strategies = {"local_search", "global_search", "hybrid_search", "naive_search"}

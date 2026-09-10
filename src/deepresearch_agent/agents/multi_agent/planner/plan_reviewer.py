@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any
 import json
 import logging
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 
@@ -34,6 +34,19 @@ class PlanValidationResult(BaseModel):
     estimated_total_tokens: Optional[int] = Field(default=None, description="预估总token消耗")
     estimated_time_minutes: Optional[float] = Field(default=None, description="预估执行时间(分钟)")
     raw_response: Optional[str] = Field(default=None, description="LLM 原始输出")
+
+    @field_validator("issues", "suggestions", mode="before")
+    @classmethod
+    def normalize_feedback(cls, value: Any) -> Any:
+        """将对象意见无损保存为 JSON 文本，保持下游的字符串列表协议。"""
+        if not isinstance(value, list):
+            return value
+        # 不猜测模型使用的字段名，保留任务标识、说明以及嵌套细节。
+        # 空对象和其他非法元素仍交由 Pydantic 拒绝，避免掩盖坏数据。
+        return [
+            json.dumps(item, ensure_ascii=False) if isinstance(item, dict) and item else item
+            for item in value
+        ]
 
 
 class PlanReviewOutcome(BaseModel):
@@ -81,7 +94,8 @@ class PlanReviewer:
             assumptions=assumptions_text,
         )
         _LOGGER.debug("PlanReviewer prompt: %s", prompt)
-        response = self._invoke_llm(prompt)
+        from deepresearch_agent.harness.research_quality import RESEARCH_GUIDANCE
+        response = self._invoke_llm(prompt + '\n' + RESEARCH_GUIDANCE)
         parsed = self._parse_response(response)
 
         problem_statement = parsed.get("problem_statement") or {}

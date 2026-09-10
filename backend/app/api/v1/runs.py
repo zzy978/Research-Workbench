@@ -1,6 +1,7 @@
 """Run control, durable event streaming, evidence and report reads."""
 
 import hashlib
+import asyncio
 import json
 import re
 
@@ -172,13 +173,16 @@ async def get_evidence(run_id: str, database=Depends(get_database)):
 
 
 @router.get("/{run_id}/report")
-async def get_report(run_id: str, database=Depends(get_database)):
+async def get_report(run_id: str, database=Depends(get_database), run_service=Depends(get_run_service)):
     run = await require_run(database, run_id)
     message = await MessageRepository(database).get_assistant_for_run(run_id)
     artifact = await ArtifactRepository(database).get_report(run_id)
     checks = await ContractRepository(database).list_for_run(run_id)
     evidence = await EvidenceRepository(database).list_for_run(run_id)
-    content, report_mode, sections = _report_presentation(message.content if message else None, evidence_count=len(evidence))
+    saved_content = message.content if message else None
+    if saved_content is None and artifact is not None:
+        saved_content = (await asyncio.to_thread(run_service.artifact_store.read_bytes, artifact.relative_path)).decode('utf-8')
+    content, report_mode, sections = _report_presentation(saved_content, evidence_count=len(evidence))
     return {
         "run_id": run_id, "status": run.status, "content": content,
         "report_mode": report_mode, "sections": sections,

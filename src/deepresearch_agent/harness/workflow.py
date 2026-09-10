@@ -22,13 +22,12 @@ from deepresearch_agent.config.settings import (
     REPORT_BATCH_BUDGET_RATIO,
     REPORT_BATCH_DIGEST_MAX_TOKENS,
     REPORT_MAX_SECTIONS,
-    REPORT_RESERVED_TOKENS,
     REPORT_SECTION_EVIDENCE_BUDGET,
-    VERIFICATION_RESERVED_TOKENS,
 )
 from deepresearch_agent.evolution.skill_compiler import compile_runtime_policy, policy_prompt
 
 from .run_context import RunContext
+from .research_quality import search_budget, search_budget_exhausted, search_ceiling, stage_reserves
 from .report_safety import add_inline_citations, citation_evidence_ids, has_internal_material, rank_evidence, sanitize_report
 
 
@@ -117,6 +116,7 @@ class PlanExecuteReportDriver:
         self._restore(context.workflow_state)
 
     def _restore(self, payload: dict[str, Any]) -> None:
+        self._execution_budget_limited = bool(payload.get('execution_budget_limited'))
         if not payload:
             return
         raw_state = payload.get("state")
@@ -146,12 +146,7 @@ class PlanExecuteReportDriver:
     async def execute(self) -> None:
         if self.planner_result is None:
             raise RuntimeError("缺少 PlannerResult")
-        execution_token_ceiling = max(
-            0,
-            self.context.budget_limits.max_llm_tokens
-            - REPORT_RESERVED_TOKENS
-            - VERIFICATION_RESERVED_TOKENS,
-        )
+        execution_token_ceiling = search_ceiling(self.context.budget_limits.max_llm_tokens)
         loop = asyncio.get_running_loop()
 
         def progress_callback(kind, task, record):
@@ -162,15 +157,12 @@ class PlanExecuteReportDriver:
             )
             future.result(timeout=10)
 
-        records = await asyncio.to_thread(
-            self.orchestrator.execute,
-            self.state,
-            self.planner_result,
-            stop_predicate=lambda: (
-                self.context.budget_usage.llm_tokens >= execution_token_ceiling
-            ),
-            progress_callback=progress_callback,
-        )
+        with search_budget(self.context.run_id, execution_token_ceiling, self.context.budget_usage.llm_tokens):
+            records = await asyncio.to_thread(
+                self.orchestrator.execute, self.state, self.planner_result,
+                stop_predicate=search_budget_exhausted, progress_callback=progress_callback,
+            )
+            self._execution_budget_limited = search_budget_exhausted()
         existing = {item.record_id for item in self.state.execution_records}
         self.state.execution_records.extend(item for item in records if item.record_id not in existing)
 
@@ -247,7 +239,7 @@ class PlanExecuteReportDriver:
             self.context.budget_limits.max_llm_tokens
             - self.context.budget_usage.llm_tokens
         )
-        return remaining < REPORT_RESERVED_TOKENS + VERIFICATION_RESERVED_TOKENS
+        return remaining < sum(stage_reserves(self.context.budget_limits.max_llm_tokens))
 
     def _build_reserved_budget_report(self) -> ReportResult:
         """Finish without another model call while keeping the report readable."""
@@ -280,8 +272,8 @@ class PlanExecuteReportDriver:
             )]
         outline = ReportOutline(
             report_type="long_document",
-            title="研究报告（预算保护模式）",
-            abstract="执行阶段已接近预留边界，报告以确定性 Evidence Card 形式完整交付。",
+            title="研究报告（部分完成）",
+            abstract="以下为现有资料支持的初步发现，尚未完成全部研究要求，不宜据此作出最终决策。",
             sections=sections,
         )
         routing = pipeline.route_cards(cards, outline)
@@ -493,6 +485,8 @@ class PlanExecuteReportDriver:
             "planner_result": self.planner_result.model_dump(mode="json") if self.planner_result else None,
             "report_result": self.report_result.model_dump(mode="json") if self.report_result else None,
             "repair_pending": self._repair_pending,
+            "execution_budget_limited": getattr(self, '_execution_budget_limited', False),
+            "quality_revision_count": self.context.workflow_state.get('quality_revision_count', 0),
         }
 
     def execution_records(self) -> list[ExecutionRecord]:
@@ -505,7 +499,8 @@ class PlanExecuteReportDriver:
             provider = record.tool_calls[0].tool_name if record.tool_calls else "unknown"
             for item in record.evidence:
                 result = item if isinstance(item, RetrievalResult) else RetrievalResult.from_dict(item)
-                output.append((record.task_id, tool_call_id, provider, result))
+                result_provider = result.metadata.extra.get("provider") or provider
+                output.append((record.task_id, tool_call_id, result_provider, result))
         return output
 
     def report_consistency(self) -> bool | None:
@@ -524,6 +519,17 @@ class PlanExecuteReportDriver:
 
     def report_metrics(self) -> dict[str, Any]:
         return dict(self.report_result.report_metrics) if self.report_result else {}
+
+    def delivery_status(self):
+        plan = self.state.plan
+        return {'incomplete_tasks': [node.description for node in plan.task_graph.nodes if node.status != 'completed'] if plan else ['尚未形成研究计划'],
+                'budget_limited': bool(self.report_metrics().get('reserved_budget_fallback')) or
+                    (bool(plan and any(node.status != 'completed' for node in plan.task_graph.nodes))
+                     and getattr(self, '_execution_budget_limited', False))}
+
+    def accept_revised_report(self, report):
+        self.report_result.final_report = report
+        self.state.response = report
 
     def plan_record(self) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
         if self.planner_result is None or self.planner_result.plan_spec is None:
@@ -552,6 +558,7 @@ class DeepResearchDriver:
         self._report: str | None = payload.get("report")
         self._plan = payload.get("plan")
         self._repair_pending = bool(payload.get("repair_pending"))
+        self._search_stop_reason = payload.get('search_stop_reason')
 
     async def plan(self, failures: list[str] | None = None) -> None:
         if failures and set(failures) & {"min_evidence", "claim_support", "source_match"}:
@@ -567,7 +574,13 @@ class DeepResearchDriver:
         }
 
     async def execute(self) -> None:
+        ceiling = search_ceiling(self.context.budget_limits.max_llm_tokens)
+        with search_budget(self.context.run_id, ceiling, self.context.budget_usage.llm_tokens):
+            await self._execute_research()
+
+    async def _execute_research(self) -> None:
         if self.answer is None:
+            self._search_stop_reason = None
             tool = getattr(self.agent, "research_tool", None)
             if tool is not None and hasattr(tool, "thinking_stream"):
                 # 直接流式消费 research_tool.thinking_stream（与 LangGraph 研究节点同源），
@@ -604,6 +617,8 @@ class DeepResearchDriver:
             provider_results = list(getattr(tool.deep_research, "provider_results", []) or [])
         if provider_results:
             self.results = provider_results
+        inner = getattr(tool, 'deep_research', None) or tool
+        self._search_stop_reason = getattr(inner, 'search_stop_reason', None) or self._search_stop_reason
 
     async def _on_tool_progress(self, msg: dict) -> None:
         """聚合工具迭代进度并发布 agent.progress / iteration.completed 事件"""
@@ -676,7 +691,9 @@ class DeepResearchDriver:
         return True
 
     def snapshot(self) -> dict[str, Any]:
-        return {"answer": self.answer, "report": self._report, "plan": self._plan, "results": [item.to_dict() for item in self.results], "repair_pending": self._repair_pending}
+        return {"answer": self.answer, "report": self._report, "plan": self._plan, "results": [item.to_dict() for item in self.results], "repair_pending": self._repair_pending,
+                "quality_revision_count": self.context.workflow_state.get('quality_revision_count', 0),
+                "search_stop_reason": self._search_stop_reason}
 
     def execution_records(self) -> list[ExecutionRecord]:
         task_id = f"task_{self.context.run_id}_research"
@@ -722,6 +739,13 @@ class DeepResearchDriver:
 
     def report_metrics(self) -> dict[str, Any]:
         return {}
+
+    def delivery_status(self):
+        return {'incomplete_tasks': [] if self.answer and self.results else ['研究结论与支持证据'],
+                'budget_limited': self._search_stop_reason == 'report_budget_reserved'}
+
+    def accept_revised_report(self, report):
+        self._report = report
 
     def plan_record(self) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
         if not self._plan:

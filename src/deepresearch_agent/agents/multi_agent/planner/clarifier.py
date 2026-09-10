@@ -82,6 +82,8 @@ class Clarifier:
             domain=context.domain_context or self._default_domain,
         )
 
+        from deepresearch_agent.harness.research_quality import RESEARCH_GUIDANCE
+        prompt += '\n' + RESEARCH_GUIDANCE
         _LOGGER.debug("Clarifier prompt: %s", prompt)
         response = self._invoke_llm(prompt)
         parsed = self._parse_response(response)

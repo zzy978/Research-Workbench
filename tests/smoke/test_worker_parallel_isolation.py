@@ -49,3 +49,13 @@ def test_parallel_workers_merge_local_state_once_in_plan_order():
     assert all(node.status == "completed" for node in state.plan.task_graph.nodes)
     assert {task_id for kind, task_id, _ in progress if kind == "task.started"} == {f"task_{index}" for index in range(4)}
     assert {task_id for kind, task_id, record_id in progress if kind == "task.completed" and record_id} == {f"task_{index}" for index in range(4)}
+
+
+def test_parallel_workers_do_not_schedule_after_budget_boundary():
+    tasks = [TaskNode(task_id='pending', task_type='custom', description='must not run')]
+    plan = PlanSpec(problem_statement=ProblemStatement(original_query='budget'),
+        task_graph=TaskGraph(nodes=tasks, execution_mode='parallel'), acceptance_criteria=AcceptanceCriteria())
+    state = PlanExecuteState(input='budget', plan=plan)
+    coordinator = WorkerCoordinator(executors=[IsolatedExecutor(threading.Barrier(2))], execution_mode='parallel')
+    assert coordinator.execute_plan(state, plan.to_execution_signal(), stop_predicate=lambda: True) == []
+    assert state.plan.task_graph.nodes[0].status == 'pending'

@@ -44,9 +44,13 @@ def create_app(
     async def lifespan(app: FastAPI):
         await database.create_schema()
         await run_service.startup_recovery(auto_resume=settings.AUTO_RESUME_RUNS if auto_resume is None else auto_resume)
-        yield
-        await run_service.shutdown()
-        await database.close()
+        try:
+            yield
+        finally:
+            try:
+                await run_service.shutdown()
+            finally:
+                await database.close()
 
     app = FastAPI(title="DeepResearch HybridRAG Local MVP", version="0.4.0", lifespan=lifespan)
     app.state.database = database
