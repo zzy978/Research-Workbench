@@ -14,7 +14,7 @@ from deepresearch_agent.config.prompts import (
     GLOBAL_SEARCH_KEYWORD_PROMPT,
 )
 from deepresearch_agent.config.settings import gl_description, GLOBAL_SEARCH_SETTINGS
-from deepresearch_agent.search.tool.base import BaseSearchTool
+from deepresearch_agent.search.tool.graph_base import GraphSearchTool
 from deepresearch_agent.search.retrieval_adapter import (
     create_retrieval_metadata,
     create_retrieval_result,
@@ -22,7 +22,7 @@ from deepresearch_agent.search.retrieval_adapter import (
 )
 
 
-class GlobalSearchTool(BaseSearchTool):
+class GlobalSearchTool(GraphSearchTool):
     """全局搜索工具，基于知识图谱和Map-Reduce模式实现跨社区的广泛查询"""
 
     def __init__(self, level: int = None):

@@ -282,6 +282,8 @@ API 支持两种研究工作流；检索后端选择与工作流选择相互独�
 | deep_research | 多轮搜索、推理和答案生成 |
 | plan_execute_report | DAG 规划、多 Agent 执行、长报告生成与完成验证 |
 
+规划任务按当前检索 Provider 的能力统一生成，默认使用 `hybrid_search`、`deep_research` 和 `reflection`。旧任务名仅用于兼容读取，转换时通过 `legacy_task_type` 保留原类型。旧 Fusion 兼容入口的同步与流式调用都会重新检索，保证每次回答使用本次检索的证据。
+
 ## 技术栈
 
 | 层 | 技术 |
@@ -361,7 +363,7 @@ Docker 中保持 `RAG_INDEX_DIR = ./data/rag_index`（或 `/app/data/rag_index`�
 - 前端：http://127.0.0.1:5173
 - API：http://127.0.0.1:8000
 
-旧图模式需要在 `.env` 设置 `PRIVATE_RETRIEVAL_BACKEND = graphrag` 和有效的 `NEO4J_PASSWORD`，再运行 `docker compose --profile graph up -d --build`。仅此模式提供 Neo4j Browser：http://127.0.0.1:7474。更新旧图时可执行 `docker compose exec backend python build_knowledge_graph.py`。
+旧图模式需要在 `.env` 设置 `PRIVATE_RETRIEVAL_BACKEND = graphrag` 和有效的 `NEO4J_PASSWORD`，再运行 `docker compose --profile graph up -d --build`。构建会根据此配置安装 `requirements-graph.txt` 中的可选图谱依赖；切换后端模式后需要重新构建镜像。仅此模式提供 Neo4j Browser：http://127.0.0.1:7474。更新旧图时可执行 `docker compose exec backend python build_knowledge_graph.py`。
 
 若前端端口冲突：
 
@@ -383,6 +385,7 @@ python -m backend.server
 ~~~
 
 日常启动后端使用 `.\.venv\Scripts\python.exe -m backend.server`，无需重复安装依赖。
+`requirements.txt` 用于默认 Hybrid/Web 模式。旧 Neo4j GraphRAG 需安装 `requirements-graph.txt`（已包含默认依赖）。单独使用旧向量相似度缓存时还需安装 `faiss-cpu==1.11.0`；默认 Hybrid/Web 工作流已关闭该缓存功能。当前前端使用 React，不需要 Streamlit 或 PyVis。
 按一次 Ctrl+C 后，后端最多等待现有 HTTP 连接 5 秒，再取消未结束的请求并清理后台任务和数据库。
 若直接使用 Uvicorn CLI，必须附带 `--timeout-graceful-shutdown 5`，否则默认无限等待连接退出。
 
@@ -423,7 +426,13 @@ npm run dev
 
 本地向量检索采用 NumPy 精确余弦，适用于小到中等规模语料；大型语料需另行评估索引内存与召回延迟。CPU 重排可能需要数十秒，`RAG_RERANK_K` 控制每次推理的候选数；增大候选数前应检查 `RUN_TOOL_TIMEOUT_SECONDS`。重排分仅用于排序和阈值筛选，不是事实正确性的概率。
 
-新流程为：原始文档 → 分块 → Embedding 与本地索引 → 向量 / BM25 双路召回 → 融合 → 本地重排 → 可引用证据。现有 Neo4j 图谱可以保留；新 RAG 索引不会自动迁移图中的数据，必须从原始 `files/` 文档重新构建。切换回旧图检索时，设置 `PRIVATE_RETRIEVAL_BACKEND = graphrag`，配置并启动 Neo4j；只有需要构建或更新旧图时才运行：
+新流程为：原始文档 → 分块 → Embedding 与本地索引 → 向量 / BM25 双路召回 → 融合 → 本地重排 → 可引用证据。现有 Neo4j 图谱可以保留；新 RAG 索引不会自动迁移图中的数据，必须从原始 `files/` 文档重新构建。切换回旧图检索时，先安装可选依赖，再设置 `PRIVATE_RETRIEVAL_BACKEND = graphrag` 并配置、启动 Neo4j：
+
+~~~powershell
+.venv/Scripts/python.exe -m pip install -r requirements-graph.txt
+~~~
+
+只有需要构建或更新旧图时才运行：
 
 ~~~powershell
 $env:PRIVATE_RETRIEVAL_BACKEND = "graphrag"

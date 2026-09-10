@@ -13,6 +13,7 @@ from deepresearch_agent.harness.contracts import SourceMode
 from deepresearch_agent.harness.errors import AppError, ErrorCode
 from deepresearch_agent.harness.policies import SourcePolicy
 from deepresearch_agent.retrieval.hybrid_index import HybridIndex
+from deepresearch_agent.retrieval.task_capabilities import task_capabilities, adapt_legacy_task
 
 
 class HybridRAGProvider:
@@ -36,7 +37,7 @@ class HybridRAGProvider:
             raise AppError(ErrorCode.SOURCE_POLICY_VIOLATION, "私有库检索不能用于联网信息源")
         strategy = filters.strategy or "hybrid_search"
         SourcePolicy().assert_tool_allowed(self.mode, strategy)
-        if strategy not in {"hybrid_search", "local_search", "global_search", "naive_search", "chain_exploration"}:
+        if adapt_legacy_task(strategy, task_capabilities(self.mode, provider=self)) != "hybrid_search":
             raise ValueError("混合检索不支持此工具")
         if not isinstance(top_k, int) or isinstance(top_k, bool) or not 1 <= top_k <= self.rerank_k:
             raise ValueError(f"top_k 必须在 1 到 {self.rerank_k} 之间")

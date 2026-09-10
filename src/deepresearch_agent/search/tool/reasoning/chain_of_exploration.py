@@ -3,7 +3,7 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 import time
 import asyncio
-import pandas as pd
+from deepresearch_agent.config.graph_runtime import pandas as pd
 import re
 
 class ChainOfExplorationSearcher:

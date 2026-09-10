@@ -39,8 +39,6 @@ class FusionGraphRAGAgent:
         self.memory = _MemoryShim()
         self.graph = _GraphShim()
         self.execution_log: list[Any] = []
-        self._global_cache: Dict[str, str] = {}
-        self._session_cache: Dict[str, Dict[str, str]] = {}
         self._last_payload: Dict[str, Any] = {}
         self._flush_threshold = AGENT_SETTINGS["fusion_stream_flush_threshold"]
         self._default_recursion_limit = AGENT_SETTINGS["default_recursion_limit"]
@@ -53,37 +51,22 @@ class FusionGraphRAGAgent:
         return {"answer": answer, "payload": payload}
 
     async def ask_stream(self, query: str, thread_id: str = "default", recursion_limit: Optional[int] = None) -> AsyncGenerator[str, None]:
-        cached = self._read_cache(query, thread_id)
-        if cached is None:
-            cached, _ = await asyncio.to_thread(self._execute, query, thread_id)
-        async for chunk in self._stream_chunks(cached):
+        answer, _ = await asyncio.to_thread(self._execute, query, thread_id)
+        async for chunk in self._stream_chunks(answer):
             yield chunk
 
     def close(self) -> None:
-        self._global_cache.clear()
-        self._session_cache.clear()
+        self._last_payload.clear()
+        self.execution_log.clear()
 
     def _execute(self, query: str, thread_id: str, *, assumptions: Optional[list[str]] = None, report_type: Optional[str] = None) -> Tuple[str, Dict[str, Any]]:
-        cached = self._read_cache(query, thread_id)
-        if cached is not None:
-            return cached, {"status": "cached"}
         payload = self.multi_agent.process_query(
             query.strip(), assumptions=assumptions, report_type=report_type, source_mode=self.source_mode
         )
         answer = self._normalize_answer(payload.get("response"))
-        self._write_cache(query, thread_id, answer)
         self.execution_log = payload.get("execution_records", [])
         self._last_payload = payload
         return answer, payload
-
-    def _read_cache(self, query: str, thread_id: str) -> Optional[str]:
-        key = query.strip()
-        return self._global_cache.get(key) or self._session_cache.get(thread_id, {}).get(key)
-
-    def _write_cache(self, query: str, thread_id: str, answer: str) -> None:
-        key = query.strip()
-        self._global_cache[key] = answer
-        self._session_cache.setdefault(thread_id, {})[key] = answer
 
     @staticmethod
     def _normalize_answer(answer: Any) -> str:

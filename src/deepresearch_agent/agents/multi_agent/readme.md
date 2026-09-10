@@ -1,5 +1,7 @@
 # Multi-Agent Plan-Execute-Report 架构
 
+> 本文保留历史兼容接口说明；当前主入口、工作流和安装方式以[根目录 README](../../../../README.md)为准。
+
 多智能体编排栈是新一代智能体协作架构，采用 Plan-Execute-Report 模式，实现复杂查询的智能化任务规划、并行执行和结构化报告生成。
 
 ## 架构概述

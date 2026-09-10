@@ -3,7 +3,7 @@ Planner编排基类
 
 整合Clarifier、TaskDecomposer、PlanReviewer，输出结构化的PlanSpec
 """
-from deepresearch_agent.config import settings
+from deepresearch_agent.retrieval.task_capabilities import TaskCapabilities, task_capabilities, adapt_legacy_task
 from typing import Optional, List, Set
 from datetime import datetime
 import logging
@@ -113,6 +113,8 @@ class BasePlanner:
         clarifier: Optional[Clarifier] = None,
         task_decomposer: Optional[TaskDecomposer] = None,
         plan_reviewer: Optional[PlanReviewer] = None,
+        retrieval_provider=None,
+        retrieval_router=None,
     ) -> None:
         if config is None:
             config = PlannerConfig(
@@ -121,6 +123,8 @@ class BasePlanner:
                 default_domain=MULTI_AGENT_DEFAULT_DOMAIN,
             )
         self.config = config
+        self._retrieval_provider = retrieval_provider
+        self._retrieval_router = retrieval_router
         self._llm = llm or get_llm_model()
 
         # 所有子组件共享同一个LLM实例，便于缓存与限流
@@ -146,6 +150,10 @@ class BasePlanner:
         """
         # 确保PlanContext存在
         context = self._ensure_plan_context(state)
+        provider = self._retrieval_provider
+        if provider is None and self._retrieval_router is not None:
+            provider = self._retrieval_router.for_mode(state.source_mode)
+        capabilities = task_capabilities(state.source_mode, provider=provider)
 
         simple = self._simple_plan(state, context, assumptions or [])
         if simple is not None:
@@ -177,6 +185,7 @@ class BasePlanner:
         task_decomposition = self._task_decomposer.decompose(
             refined_query,
             source_mode=state.source_mode,
+            capabilities=capabilities,
         )
 
         # Step 3: 计划审校
@@ -188,12 +197,13 @@ class BasePlanner:
             background_info=context.domain_context,
             user_intent=context.user_preferences.get("intent"),
             source_mode=state.source_mode,
+            capabilities=capabilities,
         )
 
         plan_spec = review_outcome.plan_spec
         plan_spec.source_mode = state.source_mode
         self._ensure_reflection_task(plan_spec)
-        self._enforce_source_mode(plan_spec, state.source_mode)
+        self._enforce_source_mode(plan_spec, state.source_mode, capabilities=capabilities, legacy=False)
         # 将生成的计划写回状态
         state.plan = plan_spec
         state.plan_context = context
@@ -236,22 +246,17 @@ class BasePlanner:
         )
 
     @staticmethod
-    def _enforce_source_mode(plan_spec: PlanSpec, source_mode: str) -> None:
-        """Normalize LLM output and reject source leakage before execution."""
-        graph_types = {"local_search", "global_search", "hybrid_search", "naive_search", "chain_exploration"}
+    def _enforce_source_mode(plan_spec: PlanSpec, source_mode: str, *, capabilities: TaskCapabilities | None = None, legacy: bool = True) -> None:
+        """Validate new plans; adapt historical labels only at compatibility entry."""
+        capabilities = capabilities or task_capabilities(source_mode)
         for node in plan_spec.task_graph.nodes:
             node.source_mode = source_mode  # type: ignore[assignment]
-            if node.task_type in {"reflection", "custom"}:
+            if legacy and node.task_type == "custom":
                 continue
-            if source_mode == "web" and node.task_type in graph_types:
-                node.task_type = "web_search"  # type: ignore[assignment]
-            elif source_mode == "graphrag" and (
-                node.task_type == "web_search" or (settings.PRIVATE_RETRIEVAL_BACKEND == "hybrid"
-                and node.task_type in graph_types)
-            ):
-                node.task_type = "hybrid_search"  # type: ignore[assignment]
-            elif source_mode == "graphrag" and settings.PRIVATE_RETRIEVAL_BACKEND == "hybrid" and node.task_type == "deeper_research":
-                node.task_type = "deep_research"
+            task_type = adapt_legacy_task(node.task_type, capabilities) if legacy else capabilities.validate(node.task_type)
+            if task_type != node.task_type:
+                node.parameters.setdefault("legacy_task_type", node.task_type)
+                node.task_type = task_type
 
     def _ensure_reflection_task(self, plan_spec: Optional[PlanSpec]) -> None:
         """

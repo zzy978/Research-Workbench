@@ -1,5 +1,5 @@
 from typing import Dict, Any
-import pandas as pd
+from deepresearch_agent.config.graph_runtime import pandas as pd
 from neo4j import Result
 from langchain_community.vectorstores import Neo4jVector
 from langchain_core.prompts import ChatPromptTemplate

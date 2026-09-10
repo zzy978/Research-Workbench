@@ -5,6 +5,7 @@ from importlib import import_module
 
 _EXPORTS = {
     "BaseSearchTool": ("deepresearch_agent.search.tool.base", "BaseSearchTool"),
+    "GraphSearchTool": ("deepresearch_agent.search.tool.graph_base", "GraphSearchTool"),
     "LocalSearchTool": ("deepresearch_agent.search.tool.local_search_tool", "LocalSearchTool"),
     "GlobalSearchTool": ("deepresearch_agent.search.tool.global_search_tool", "GlobalSearchTool"),
     "HybridSearchTool": ("deepresearch_agent.search.tool.hybrid_tool", "HybridSearchTool"),

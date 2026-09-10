@@ -11,8 +11,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 
 from deepresearch_agent.config.prompts import TASK_DECOMPOSE_PROMPT
-from deepresearch_agent.config.prompts.planner_prompts import HYBRID_TASK_DECOMPOSE_PROMPT
-from deepresearch_agent.config import settings
+from deepresearch_agent.retrieval.task_capabilities import TaskCapabilities, task_capabilities, adapt_legacy_task
 from deepresearch_agent.harness.research_quality import RESEARCH_GUIDANCE
 from deepresearch_agent.models.get_models import get_llm_model
 from deepresearch_agent.agents.multi_agent.core.plan_spec import (
@@ -50,7 +49,7 @@ class TaskDecomposer:
         self._llm = llm or get_llm_model()
         self._max_tasks = max_tasks
 
-    def decompose(self, query: str, *, source_mode: str = "graphrag") -> TaskDecompositionResult:
+    def decompose(self, query: str, *, source_mode: str = "graphrag", capabilities: TaskCapabilities | None = None) -> TaskDecompositionResult:
         """
         根据查询生成TaskGraph
 
@@ -60,30 +59,19 @@ class TaskDecomposer:
         返回:
             TaskDecompositionResult
         """
-        template = (HYBRID_TASK_DECOMPOSE_PROMPT
-                    if source_mode == "graphrag" and settings.PRIVATE_RETRIEVAL_BACKEND == "hybrid"
-                    else TASK_DECOMPOSE_PROMPT)
-        prompt = template.format(
+        capabilities = capabilities or task_capabilities(source_mode)
+        prompt = TASK_DECOMPOSE_PROMPT.format(
             query=query,
             max_tasks=self._max_tasks,
+            source_mode=source_mode,
+            capabilities=capabilities.prompt_description(),
         )
         prompt += '\n' + RESEARCH_GUIDANCE
-        if source_mode == "web":
-            prompt += (
-                "\n\n【不可覆盖的信息源约束】本 Run 的 source_mode=web。"
-                "所有检索任务只能使用 web_search、deep_research 或 deeper_research；"
-                "禁止 local_search/global_search/hybrid_search/naive_search/chain_exploration。"
-            )
-        else:
-            prompt += (
-                "\n\n【不可覆盖的信息源约束】本 Run 的 source_mode=graphrag。"
-                "禁止生成 web_search；检索只能使用当前私有库后端支持的工具。"
-            )
 
         _LOGGER.debug("TaskDecomposer prompt: %s", prompt)
         response = self._invoke_llm(prompt)
         parsed = self._parse_response(response)
-        task_graph = self._build_task_graph(parsed, source_mode=source_mode)
+        task_graph = self._build_task_graph(parsed, source_mode=source_mode, capabilities=capabilities, legacy=False)
         _LOGGER.debug("TaskDecomposer graph: %s", task_graph.to_dict())
         return TaskDecompositionResult(
             task_graph=task_graph,
@@ -108,7 +96,7 @@ class TaskDecomposer:
             _LOGGER.error("TaskDecomposer JSON解析失败: %s | 原始输出: %s", exc, response)
             raise ValueError("无法解析任务分解输出为有效JSON") from exc
 
-    def _build_task_graph(self, data: Dict[str, Any], *, source_mode: str = "graphrag") -> TaskGraph:
+    def _build_task_graph(self, data: Dict[str, Any], *, source_mode: str = "graphrag", capabilities: TaskCapabilities | None = None, legacy: bool = True) -> TaskGraph:
         """
         将原始JSON转换为TaskGraph模型
 
@@ -119,22 +107,15 @@ class TaskDecomposer:
         """
         nodes_data: List[Dict[str, Any]] = data.get("nodes") or []
         sanitized_nodes: List[TaskNode] = []
+        capabilities = capabilities or task_capabilities(source_mode)
 
         for raw in nodes_data:
             node_dict = dict(raw)
 
             task_type = node_dict.get("task_type", "custom")
-            if source_mode == "web" and task_type in {
-                "local_search", "global_search", "hybrid_search", "naive_search", "chain_exploration"
-            }:
-                task_type = "web_search"
-            elif source_mode == "graphrag" and (
-                task_type == "web_search" or (settings.PRIVATE_RETRIEVAL_BACKEND == "hybrid"
-                and task_type in {"local_search", "global_search", "naive_search", "chain_exploration"})
-            ):
-                task_type = "hybrid_search"
-            elif source_mode == "graphrag" and settings.PRIVATE_RETRIEVAL_BACKEND == "hybrid" and task_type == "deeper_research":
-                task_type = "deep_research"
+            task_type = adapt_legacy_task(task_type, capabilities) if legacy else capabilities.validate(task_type)
+            if legacy and task_type != node_dict.get("task_type"):
+                node_dict.setdefault("parameters", {})["legacy_task_type"] = node_dict.get("task_type")
             if task_type not in _ALLOWED_TASK_TYPES:
                 original_type = task_type
                 task_type = "custom"

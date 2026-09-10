@@ -1,7 +1,7 @@
 import time
 import json
 from typing import List, Dict, Any, Tuple
-import pandas as pd
+from deepresearch_agent.config.graph_runtime import pandas as pd
 from neo4j import Result
 
 from langchain_core.tools import BaseTool
@@ -14,7 +14,7 @@ from deepresearch_agent.config.prompts import (
     LOCAL_SEARCH_KEYWORD_PROMPT,
 )
 from deepresearch_agent.config.settings import gl_description, response_type, HYBRID_SEARCH_SETTINGS
-from deepresearch_agent.search.tool.base import BaseSearchTool
+from deepresearch_agent.search.tool.graph_base import GraphSearchTool
 from deepresearch_agent.agents.multi_agent.core.retrieval_result import RetrievalResult
 from deepresearch_agent.search.retrieval_adapter import (
     create_retrieval_metadata,
@@ -26,7 +26,7 @@ from deepresearch_agent.search.retrieval_adapter import (
 )
 
 
-class HybridSearchTool(BaseSearchTool):
+class HybridSearchTool(GraphSearchTool):
     """
     混合搜索工具，实现类似LightRAG的双级检索策略
     结合了局部细节检索和全局主题检索

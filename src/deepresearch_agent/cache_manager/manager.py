@@ -5,9 +5,14 @@ from pathlib import Path
 from .strategies import CacheKeyStrategy, SimpleCacheKeyStrategy, ContextAwareCacheKeyStrategy, ContextAndKeywordAwareCacheKeyStrategy
 from .backends import CacheStorageBackend, MemoryCacheBackend, HybridCacheBackend, ThreadSafeCacheBackend
 from .models import CacheItem
-from .vector_similarity import VectorSimilarityMatcher, get_cache_embedding_provider
 
 from deepresearch_agent.config.settings import CACHE_SETTINGS
+
+
+def get_cache_embedding_provider():
+    """Load vector-cache dependencies only when that feature is enabled."""
+    from .vector_similarity import get_cache_embedding_provider as create_provider
+    return create_provider()
 
 
 class CacheManager:
@@ -73,6 +78,8 @@ class CacheManager:
         # 向量相似性匹配器
         self.enable_vector_similarity = enable_vector_similarity
         if enable_vector_similarity:
+            from .vector_similarity import VectorSimilarityMatcher
+
             # 确保缓存目录存在
             Path(cache_dir).mkdir(parents=True, exist_ok=True)
 

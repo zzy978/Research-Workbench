@@ -8,11 +8,11 @@ from langchain_core.output_parsers import StrOutputParser
 
 from deepresearch_agent.config.prompts import NAIVE_PROMPT, NAIVE_SEARCH_QUERY_PROMPT
 from deepresearch_agent.config.settings import response_type, naive_description, NAIVE_SEARCH_TOP_K
-from deepresearch_agent.search.tool.base import BaseSearchTool
+from deepresearch_agent.search.tool.graph_base import GraphSearchTool
 from deepresearch_agent.search.utils import VectorUtils
 
 
-class NaiveSearchTool(BaseSearchTool):
+class NaiveSearchTool(GraphSearchTool):
     """简单的Naive RAG搜索工具，只使用embedding进行向量搜索"""
     
     def __init__(self):

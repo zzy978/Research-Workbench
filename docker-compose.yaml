@@ -29,6 +29,8 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        PRIVATE_RETRIEVAL_BACKEND: "${PRIVATE_RETRIEVAL_BACKEND:-hybrid}"
     restart: unless-stopped
     env_file: .env
     environment:

@@ -30,6 +30,7 @@ from deepresearch_agent.harness.policies import SourcePolicy
 from deepresearch_agent.harness.evidence import EvidenceLedger
 from deepresearch_agent.retrieval.base import RetrievalProvider, SearchFilters, ToolCallContext, run_async_from_sync, provider_supports_graph
 from deepresearch_agent.retrieval.router import RetrievalRouter, create_default_router
+from deepresearch_agent.retrieval.task_capabilities import task_capabilities, adapt_legacy_task
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -91,10 +92,10 @@ class RetrievalExecutor(BaseExecutor):
         provider = self._provider or self._router.for_mode(state.source_mode)  # type: ignore[union-attr]
         if provider.mode.value != state.source_mode or task.source_mode != state.source_mode:
             raise ValueError("Plan/Task/Provider source_mode 不一致")
-        if provider.mode == SourceMode.GRAPHRAG and not provider_supports_graph(provider) and tool_name in {
-            "local_search", "global_search", "naive_search", "chain_exploration"
-        }:
-            tool_name = "hybrid_search"
+        capabilities = task_capabilities(state.source_mode, provider=provider)
+        tool_name = capabilities.validate(adapt_legacy_task(tool_name, capabilities))
+        if tool_name != task.task_type:
+            payload["legacy_task_type"] = task.task_type
         tool_call_id = f"call_{uuid.uuid4().hex}"
         start_time = time.perf_counter()
         success = True

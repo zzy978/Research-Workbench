@@ -5,115 +5,16 @@ Planner层Prompt模板集合
 """
 
 # 功能: 将用户查询分解为可执行的子任务，生成TaskGraph
-TASK_DECOMPOSE_PROMPT = '''你是一个专业的任务规划助手。你的职责是将用户的复杂查询分解为清晰、可执行的子任务序列。
-
-**用户查询**: {query}
-
-**最大任务数**: {max_tasks}
-
-**可用任务类型**:
-1. **local_search**: 在知识图谱中检索特定实体的详细信息和局部关系（微观视角，针对具体实体）
-2. **global_search**: 在知识图谱中检索整体概念和社区级摘要信息（宏观视角，针对主题概念）
-3. **hybrid_search**: 结合图谱结构和向量语义的综合检索，适合需要宏微观结合的场景
-4. **naive_search**: 直接向量检索，快速获取原文片段或概念解释
-5. **deep_research** / **deeper_research**: 深度研究和多轮推理，构建完整证据链或复杂分析
-6. **chain_exploration**: 图谱路径探索，通过实体关系链追踪信息，适合"如何达成"类问题
-7. **reflection**: 对已完成任务进行质量校验或补充改进建议，通常依赖已有答案
-
-**分解原则**:
-1. 每个子任务应该是独立、原子化的操作
-2. 任务之间可以有依赖关系，但不要过度依赖
-3. 优先级分配: 1(高优先级，基础性任务) 2(中优先级) 3(低优先级，增强性任务)
-4. 预估token消耗要合理（简单查询300-500，复杂查询500-1000，深度研究1000-2000）
-5. 避免创建冗余任务
-6. 初始化每个任务的状态为 "pending"
-
-**示例1 - 简单查询**:
-查询: "孙悟空的师父是谁?"
-分解结果:
-```json
-{{
-  "nodes": [
-    {{
-      "task_id": "task_001",
-      "task_type": "local_search",
-      "description": "在知识图谱中检索孙悟空的师徒关系",
-      "priority": 1,
-      "estimated_tokens": 400,
-      "depends_on": [],
-      "entities": ["孙悟空"],
-      "status": "pending"
-    }}
-  ],
-  "execution_mode": "sequential"
-}}
-```
-
-**示例2 - 复杂查询**:
-查询: "分析悟空传中孙悟空与天庭的冲突根源和发展过程"
-分解结果:
-```json
-{{
-  "nodes": [
-    {{
-      "task_id": "task_001",
-      "task_type": "local_search",
-      "description": "检索孙悟空的基本信息和早期经历",
-      "priority": 1,
-      "estimated_tokens": 500,
-      "depends_on": [],
-      "entities": ["孙悟空"],
-      "status": "pending"
-    }},
-    {{
-      "task_id": "task_002",
-      "task_type": "local_search",
-      "description": "检索天庭的统治结构和规则体系",
-      "priority": 1,
-      "estimated_tokens": 500,
-      "depends_on": [],
-      "entities": ["天庭"],
-      "status": "pending"
-    }},
-    {{
-      "task_id": "task_003",
-      "task_type": "chain_exploration",
-      "description": "追踪孙悟空与天庭之间的对抗关系路径",
-      "priority": 2,
-      "estimated_tokens": 800,
-      "depends_on": ["task_001", "task_002"],
-      "entities": ["孙悟空", "天庭"],
-      "status": "pending"
-    }},
-    {{
-      "task_id": "task_004",
-      "task_type": "deep_research",
-      "description": "深度分析冲突的根源和演变逻辑",
-      "priority": 2,
-      "estimated_tokens": 1200,
-      "depends_on": ["task_003"],
-      "status": "pending"
-    }},
-    {{
-      "task_id": "task_005",
-      "task_type": "global_search",
-      "description": "获取悟空传的整体主题和叙事结构",
-      "priority": 3,
-      "estimated_tokens": 600,
-      "depends_on": [],
-      "status": "pending"
-    }}
-  ],
-  "execution_mode": "adaptive"
-}}
-```
-
-现在请针对以下查询生成任务分解方案，严格按照JSON格式输出：
-
-**查询**: {query}
-
-**任务分解方案**:
-```json
+TASK_DECOMPOSE_PROMPT = '''你是任务规划助手，将用户问题拆分为可执行、可验证的研究任务。
+用户查询：{query}
+最大任务数：{max_tasks}
+当前信息源：{source_mode}
+可用任务类型（完整列表）：
+{capabilities}
+仅使用上述能力。每项任务围绕事实、机制或对比维度展开；避免重复检索。
+单次检索足以回答时直接检索；需要追问和多轮调查时使用 deep_research。
+每个任务提供 task_id、task_type、description、priority（1 至 3）、estimated_tokens、depends_on、parameters（含 query）、status（pending）。
+仅输出 JSON 对象，包含 nodes 数组及 execution_mode（sequential、parallel 或 adaptive）。
 '''
 
 
@@ -195,6 +96,13 @@ PLAN_REVIEW_PROMPT = '''你是一个计划审校助手。你的职责是审核�
 
 **用户确认的假设条件**: {assumptions}
 
+**当前信息源**: {source_mode}
+
+**可用任务类型（完整列表）**:
+{capabilities}
+
+只能保留或添加上述类型的任务。无法用当前能力完成的目标应在 issues 中明确指出，不得编造工具。
+
 **审校检查项**:
 1. **任务数量**: 是否在合理范围内（建议1-8个任务）
 2. **依赖关系**: 是否存在循环依赖或无法满足的依赖
@@ -241,7 +149,7 @@ PLAN_REVIEW_PROMPT = '''你是一个计划审校助手。你的职责是审核�
     "is_valid": true,
     "issues": [],
     "suggestions": [
-      "建议在task_003之后增加一个global_search任务，获取悟空传的整体叙事结构"
+      "task_003：补充与用户问题直接相关的独立证据"
     ],
     "estimated_total_tokens": 3200,
     "estimated_time_minutes": 5
@@ -253,14 +161,4 @@ PLAN_REVIEW_PROMPT = '''你是一个计划审校助手。你的职责是审核�
 
 **PlanSpec**:
 ```json
-'''
-
-
-HYBRID_TASK_DECOMPOSE_PROMPT = '''你是一个任务规划助手，将问题拆分为可执行的原文证据检索任务。
-用户查询：{query}
-最大任务数：{max_tasks}
-可用任务类型：hybrid_search（对私有文档进行向量、BM25 混合检索与重排）；deep_research（通过多轮混合检索调查复杂子问题）；reflection（校验证据和答案）。
-单次检索使用 hybrid_search，确需追问和多轮调查时使用 deep_research。按问题的事实、机制和对比维度拆分，避免重复检索。不使用实体图、社区或图路径探索工具。
-每个任务提供 task_id、task_type、description、priority（1 至 3）、estimated_tokens、depends_on、entities、status（pending）。
-仅输出 JSON 对象，包含 nodes 数组及 execution_mode（sequential、parallel 或 adaptive）。
 '''

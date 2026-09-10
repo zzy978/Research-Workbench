@@ -13,7 +13,7 @@ from deepresearch_agent.config.settings import BASE_SEARCH_CONFIG
 class BaseSearchTool(ABC):
     """搜索工具基础类，为各种搜索实现提供通用功能"""
     
-    def __init__(self, cache_dir: str = "./cache/search", *, enable_graph: bool = True, enable_vector_cache: bool | None = None):
+    def __init__(self, cache_dir: str = "./cache/search", *, enable_vector_cache: bool | None = False):
         """
         初始化搜索工具
         
@@ -23,8 +23,6 @@ class BaseSearchTool(ABC):
         # 初始化大语言模型和嵌入模型
         self.llm = get_llm_model()
         self.embeddings = get_embeddings_model()
-        self.default_vector_limit = BASE_SEARCH_CONFIG["vector_limit"]
-        self.default_text_limit = BASE_SEARCH_CONFIG["text_limit"]
         self.default_semantic_top_k = BASE_SEARCH_CONFIG["semantic_top_k"]
         self.default_relevance_top_k = BASE_SEARCH_CONFIG["relevance_top_k"]
         
@@ -44,39 +42,6 @@ class BaseSearchTool(ABC):
             "llm_time": 0,    # 大语言模型处理时间
             "total_time": 0   # 总处理时间
         }
-        
-        # 初始化Neo4j连接
-        self.graph = None
-        self.driver = None
-        if enable_graph:
-            self._setup_neo4j()
-    
-    def _setup_neo4j(self):
-        """设置Neo4j连接"""
-        from deepresearch_agent.config.neo4jdb import get_db_manager
-        # 获取数据库连接管理器
-        db_manager = get_db_manager()
-        
-        # 获取图数据库实例
-        self.graph = db_manager.get_graph()
-        
-        # 获取驱动（用于直接执行查询）
-        self.driver = db_manager.get_driver()
-    
-    def db_query(self, cypher: str, params: Dict[str, Any] = {}):
-        """
-        执行Cypher查询
-        
-        参数:
-            cypher: Cypher查询语句
-            params: 查询参数
-            
-        返回:
-            查询结果
-        """
-        # 使用连接管理器执行查询
-        from deepresearch_agent.config.neo4jdb import get_db_manager
-        return get_db_manager().execute_query(cypher, params)
         
     @abstractmethod
     def _setup_chains(self):
@@ -112,82 +77,6 @@ class BaseSearchTool(ABC):
         """
         pass
 
-    def vector_search(self, query: str, limit: int = None) -> List[str]:
-        """
-        基于向量相似度的搜索方法
-        
-        参数:
-            query: 搜索查询
-            limit: 最大返回结果数
-            
-        返回:
-            List[str]: 匹配实体ID列表
-        """
-        try:
-            limit = limit or self.default_vector_limit
-            # 生成查询的嵌入向量
-            query_embedding = self.embeddings.embed_query(query)
-            
-            # 构建Neo4j向量搜索查询
-            cypher = """
-            CALL db.index.vector.queryNodes('vector', $limit, $embedding)
-            YIELD node, score
-            RETURN node.id AS id, score
-            ORDER BY score DESC
-            """
-            
-            # 执行搜索
-            results = self.db_query(cypher, {
-                "embedding": query_embedding,
-                "limit": limit
-            })
-            
-            # 提取实体ID
-            if not results.empty:
-                return results['id'].tolist()
-            else:
-                return []
-                
-        except Exception as e:
-            print(f"向量搜索失败: {e}")
-            # 如果向量搜索失败，尝试使用文本搜索作为备用
-            return self.text_search(query, limit)
-    
-    def text_search(self, query: str, limit: int = None) -> List[str]:
-        """
-        基于文本匹配的搜索方法（作为向量搜索的备选）
-        
-        参数:
-            query: 搜索查询
-            limit: 最大返回结果数
-            
-        返回:
-            List[str]: 匹配实体ID列表
-        """
-        try:
-            limit = limit or self.default_text_limit
-            # 构建全文搜索查询
-            cypher = """
-            MATCH (e:__Entity__)
-            WHERE e.id CONTAINS $query OR e.description CONTAINS $query
-            RETURN e.id AS id
-            LIMIT $limit
-            """
-            
-            results = self.db_query(cypher, {
-                "query": query,
-                "limit": limit
-            })
-            
-            if not results.empty:
-                return results['id'].tolist()
-            else:
-                return []
-                
-        except Exception as e:
-            print(f"文本搜索失败: {e}")
-            return []
-            
     def semantic_search(self, query: str, entities: List[Dict],
                         embedding_field: str = "embedding",
                         top_k: int = None) -> List[Dict]:
@@ -277,13 +166,9 @@ class BaseSearchTool(ABC):
         print(f"性能指标 - {operation}: {duration:.4f}s")
     
     def close(self):
-        """关闭资源连接"""
-        # 关闭Neo4j连接
-        if hasattr(self, 'graph'):
-            # 如果Neo4jGraph有close方法，调用它
-            if hasattr(self.graph, 'close'):
-                self.graph.close()
-    
+        """释放由具体工具拥有的资源；通用基类不持有图连接。"""
+        pass
+
     def __enter__(self):
         """上下文管理器入口"""
         return self

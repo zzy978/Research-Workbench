@@ -1,23 +1,30 @@
-from deepresearch_agent.search.tool.reasoning.nlp import extract_between, extract_from_templates, extract_sentences
-from deepresearch_agent.search.tool.reasoning.prompts import kb_prompt, num_tokens_from_string
-from deepresearch_agent.search.tool.reasoning.thinking import ThinkingEngine
-from deepresearch_agent.search.tool.reasoning.validator import AnswerValidator
-from deepresearch_agent.search.tool.reasoning.search import DualPathSearcher, QueryGenerator
-from deepresearch_agent.search.tool.reasoning.community_enhance import CommunityAwareSearchEnhancer
-from deepresearch_agent.search.tool.reasoning.kg_builder import DynamicKnowledgeGraphBuilder
-from deepresearch_agent.search.tool.reasoning.evidence import EvidenceChainTracker
+"""按需导出推理组件，通用研究流程不加载图专用模块。"""
 
-__all__ = [
-    "extract_between",
-    "extract_from_templates",
-    "extract_sentences",
-    "kb_prompt",
-    "num_tokens_from_string",
-    "ThinkingEngine",
-    "AnswerValidator",
-    "DualPathSearcher",
-    "QueryGenerator",
-    "CommunityAwareSearchEnhancer",
-    "DynamicKnowledgeGraphBuilder",
-    "EvidenceChainTracker",
-]
+from importlib import import_module
+
+
+_EXPORTS = {
+    "extract_between": "nlp",
+    "extract_from_templates": "nlp",
+    "extract_sentences": "nlp",
+    "kb_prompt": "prompts",
+    "num_tokens_from_string": "prompts",
+    "ThinkingEngine": "thinking",
+    "AnswerValidator": "validator",
+    "DualPathSearcher": "search",
+    "QueryGenerator": "search",
+    "CommunityAwareSearchEnhancer": "community_enhance",
+    "DynamicKnowledgeGraphBuilder": "kg_builder",
+    "EvidenceChainTracker": "evidence",
+}
+
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name: str):
+    module_name = _EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(name)
+    value = getattr(import_module(f"{__name__}.{module_name}"), name)
+    globals()[name] = value
+    return value

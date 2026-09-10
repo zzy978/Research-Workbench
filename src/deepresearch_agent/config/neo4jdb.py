@@ -1,5 +1,5 @@
 from typing import Dict, Any
-import pandas as pd
+from deepresearch_agent.config.graph_runtime import pandas as pd
 from neo4j import GraphDatabase, Result
 from langchain_neo4j import Neo4jGraph
 from deepresearch_agent.config.settings import NEO4J_CONFIG

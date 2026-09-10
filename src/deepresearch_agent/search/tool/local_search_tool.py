@@ -16,12 +16,12 @@ from deepresearch_agent.config.prompts import (
     LOCAL_SEARCH_KEYWORD_PROMPT,
 )
 from deepresearch_agent.config.settings import lc_description
-from deepresearch_agent.search.tool.base import BaseSearchTool
+from deepresearch_agent.search.tool.graph_base import GraphSearchTool
 from deepresearch_agent.search.local_search import LocalSearch
 from deepresearch_agent.search.retrieval_adapter import results_from_documents, results_to_payload
 
 
-class LocalSearchTool(BaseSearchTool):
+class LocalSearchTool(GraphSearchTool):
     """本地搜索工具，基于向量检索实现社区内部的精确查询"""
     
     def __init__(self):

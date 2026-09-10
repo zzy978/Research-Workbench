@@ -1,0 +1,9 @@
+# Optional legacy Neo4j GraphRAG ingestion, retrieval and vector cache.
+# Includes the default Hybrid/Web runtime.
+-r requirements.txt
+faiss-cpu==1.11.0
+graphdatascience==1.12
+hanlp==2.1.1
+langchain_neo4j==0.4.0
+schedule==1.2.2
+shutup==0.2.0

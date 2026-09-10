@@ -1,5 +1,6 @@
 from typing import Dict, List
 import re
+from deepresearch_agent.search.tool.reasoning.results import merge_search_results
 
 from deepresearch_agent.config.prompts import (
     SEARCH_RESULT_COMPARISON_PROMPT,
@@ -134,62 +135,11 @@ class DualPathSearcher:
             # 评估失败时默认合并结果
             return "both"
     
-    def _merge_results(self, result1: Dict, result2: Dict) -> Dict:
-        """
-        合并两个搜索结果
-        
-        参数:
-            result1: 第一个搜索结果
-            result2: 第二个搜索结果
-            
-        返回:
-            Dict: 合并后的结果
-        """
-        # 初始化结果字典
-        result = {
-            "chunks": result1.get("chunks", []).copy(),
-            "doc_aggs": result1.get("doc_aggs", []).copy()
-        }
-        
-        # 如果第一个结果没有chunks，直接使用第二个结果
-        if not result["chunks"]:
-            return result2
-        
-        # 已存在的chunk_id和doc_id集合
-        existing_chunk_ids = set(c.get("chunk_id") for c in result["chunks"] if "chunk_id" in c)
-        existing_doc_ids = set(d.get("doc_id") for d in result["doc_aggs"] if "doc_id" in d)
-        
-        # 合并chunks，避免重复
-        for chunk in result2.get("chunks", []):
-            chunk_id = chunk.get("chunk_id")
-            # 只添加不存在的chunks
-            if chunk_id and chunk_id not in existing_chunk_ids:
-                result["chunks"].append(chunk)
-                existing_chunk_ids.add(chunk_id)
-            elif not chunk_id:
-                # 如果没有chunk_id，使用内容作为唯一性判断
-                content = chunk.get("text", "")
-                if not any(c.get("text") == content for c in result["chunks"]):
-                    result["chunks"].append(chunk)
-        
-        # 合并doc_aggs，避免重复
-        for doc in result2.get("doc_aggs", []):
-            doc_id = doc.get("doc_id")
-            if doc_id and doc_id not in existing_doc_ids:
-                result["doc_aggs"].append(doc)
-                existing_doc_ids.add(doc_id)
-        
-        # 复制其他字段
-        for key in result2:
-            if key not in ["chunks", "doc_aggs"]:
-                if key not in result:
-                    result[key] = result2[key]
-                elif isinstance(result[key], list) and isinstance(result2[key], list):
-                    # 合并列表类型的字段
-                    result[key].extend([item for item in result2[key] if item not in result[key]])
-        
-        return result
-        
+    @staticmethod
+    def _merge_results(result1: Dict, result2: Dict) -> Dict:
+        """兼容旧调用方；合并逻辑与检索策略无关。"""
+        return merge_search_results(result1, result2)
+
 
 class QueryGenerator:
     """查询生成器：生成子查询和跟进查询"""

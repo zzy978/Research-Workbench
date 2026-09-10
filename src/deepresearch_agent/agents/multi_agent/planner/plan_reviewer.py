@@ -13,6 +13,7 @@ from langchain_core.messages import BaseMessage
 
 from deepresearch_agent.config.prompts import PLAN_REVIEW_PROMPT
 from deepresearch_agent.models.get_models import get_llm_model
+from deepresearch_agent.retrieval.task_capabilities import TaskCapabilities, task_capabilities
 from deepresearch_agent.agents.multi_agent.core.plan_spec import (
     PlanSpec,
     ProblemStatement,
@@ -80,6 +81,7 @@ class PlanReviewer:
         background_info: Optional[str] = None,
         user_intent: Optional[str] = None,
         source_mode: str = "graphrag",
+        capabilities: TaskCapabilities | None = None,
     ) -> PlanReviewOutcome:
         """
         对任务图执行审校并输出PlanSpec
@@ -87,11 +89,14 @@ class PlanReviewer:
         task_graph_json = json.dumps(task_graph.to_dict(), ensure_ascii=False, indent=2)
         assumptions_text = json.dumps(assumptions or [], ensure_ascii=False)
 
+        capabilities = capabilities or task_capabilities(source_mode)
         prompt = PLAN_REVIEW_PROMPT.format(
             query=original_query,
             refined_query=refined_query or original_query,
             task_graph=task_graph_json,
             assumptions=assumptions_text,
+            source_mode=source_mode,
+            capabilities=capabilities.prompt_description(),
         )
         _LOGGER.debug("PlanReviewer prompt: %s", prompt)
         from deepresearch_agent.harness.research_quality import RESEARCH_GUIDANCE
@@ -106,8 +111,15 @@ class PlanReviewer:
         acceptance_data = parsed.get("acceptance_criteria") or {}
         validation_data = parsed.get("validation_results") or {}
 
-        reviewed_task_graph = self._resolve_task_graph(parsed.get("task_graph"), task_graph)
+        proposed_graph = parsed.get("task_graph")
+        # Check capabilities before structural fallback can hide unsupported tools.
+        if isinstance(proposed_graph, dict) and isinstance(proposed_graph.get("nodes"), list):
+            for node in proposed_graph["nodes"]:
+                if isinstance(node, dict):
+                    capabilities.validate(node.get("task_type", ""))
+        reviewed_task_graph = self._resolve_task_graph(proposed_graph, task_graph)
         for node in reviewed_task_graph.nodes:
+            capabilities.validate(node.task_type)
             node.source_mode = source_mode  # type: ignore[assignment]
 
         plan_spec = PlanSpec(

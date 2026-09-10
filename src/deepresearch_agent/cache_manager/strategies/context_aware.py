@@ -51,35 +51,8 @@ class ContextAwareCacheKeyStrategy(CacheKeyStrategy):
         return hashlib.md5(combined.encode('utf-8')).hexdigest()
 
 
-class ContextAndKeywordAwareCacheKeyStrategy(CacheKeyStrategy):
+class ContextAndKeywordAwareCacheKeyStrategy(ContextAwareCacheKeyStrategy):
     """结合上下文和关键词的缓存键策略，同时考虑会话历史和关键词"""
-    
-    def __init__(self, context_window: int = 3):
-        """
-        初始化上下文与关键词感知的缓存键策略
-        
-        参数:
-            context_window: 要考虑的前几条会话历史记录
-        """
-        self.context_window = context_window
-        self.conversation_history = {}
-        self.history_versions = {}
-    
-    def update_history(self, query: str, thread_id: str = "default", max_history: int = 10):
-        """更新会话历史"""
-        if thread_id not in self.conversation_history:
-            self.conversation_history[thread_id] = []
-            self.history_versions[thread_id] = 0
-        
-        # 添加新查询到历史
-        self.conversation_history[thread_id].append(query)
-        
-        # 保持历史记录在可管理的大小
-        if len(self.conversation_history[thread_id]) > max_history:
-            self.conversation_history[thread_id] = self.conversation_history[thread_id][-max_history:]
-        
-        # 增加版本号，确保上下文变化时键也会变化
-        self.history_versions[thread_id] += 1
     
     def generate_key(self, query: str, **kwargs) -> str:
         """生成同时考虑上下文和关键词的缓存键"""

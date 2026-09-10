@@ -45,14 +45,13 @@ def test_hybrid_deep_tool_initializes_without_graph(monkeypatch):
     from deepresearch_agent.search.tool import deep_research_tool as module
 
     def initialize(self, **kwargs):
-        assert kwargs["enable_graph"] is False
         assert kwargs["enable_vector_cache"] is False
         self.llm = SimpleNamespace()
 
     monkeypatch.setattr(module.BaseSearchTool, "__init__", initialize)
     provider = SimpleNamespace(mode=SourceMode.GRAPHRAG, provider_name="hybrid", supports_graph=False)
     tool = module.DeepResearchTool(provider=provider)
-    assert tool.hybrid_tool is tool.global_tool is tool.local_tool is None
+    assert tool._graph_keywords is None
 
 
 def test_hybrid_agent_disables_deeper_and_graph_cache(monkeypatch):
@@ -81,7 +80,6 @@ def test_default_deep_tool_resolves_router_provider(monkeypatch):
     provider = SimpleNamespace(mode=SourceMode.GRAPHRAG, supports_graph=False)
     monkeypatch.setattr(router, "create_default_router", lambda: router.RetrievalRouter({SourceMode.GRAPHRAG: provider}))
     def initialize(self, **kwargs):
-        assert kwargs["enable_graph"] is False
         self.llm = SimpleNamespace()
     monkeypatch.setattr(module.BaseSearchTool, "__init__", initialize)
     assert module.DeepResearchTool().retrieval_provider is provider

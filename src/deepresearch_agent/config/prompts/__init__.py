@@ -65,11 +65,6 @@ from deepresearch_agent.config.prompts.planner_prompts import (
     CLARIFY_PROMPT,
     PLAN_REVIEW_PROMPT,
 )
-from deepresearch_agent.config.prompts.executor_prompts import (
-    EXECUTE_PROMPT,
-    REFLECT_PROMPT,
-    REPLAN_PROMPT,
-)
 from deepresearch_agent.config.prompts.reporter_prompts import (
     OUTLINE_SYSTEM_PROMPT,
     OUTLINE_PROMPT,
@@ -144,10 +139,6 @@ __all__ = [
     "TASK_DECOMPOSE_PROMPT",
     "CLARIFY_PROMPT",
     "PLAN_REVIEW_PROMPT",
-    # 执行层模板
-    "EXECUTE_PROMPT",
-    "REFLECT_PROMPT",
-    "REPLAN_PROMPT",
     # 报告层模板
     "OUTLINE_SYSTEM_PROMPT",
     "OUTLINE_PROMPT",

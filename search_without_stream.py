@@ -39,7 +39,7 @@ def run_query(agent_name: str, query: str, thread_id: str, source_mode: SourceMo
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run an existing GraphRAG agent smoke query")
+    parser = argparse.ArgumentParser(description="Run a private-library or Web research workflow through Harness")
     parser.add_argument("query", nargs="?", default="急性脑⾎管病吃什么药？写一份研究报告")
     parser.add_argument("--agent", choices=AGENT_NAMES, default="deep_research")
     parser.add_argument("--source-mode", choices=[mode.value for mode in SourceMode], default=SourceMode.GRAPHRAG.value)

@@ -14,7 +14,7 @@ deepresearch_agent/config/    # 配置文件目录
 - `graph_prompts.py`：图谱构建、索引维护、社区摘要
 - `qa_prompts.py`：各类检索问答（Naive/Local/Global/Reduce/上下文重写）
 - `reasoning_prompts.py`：深度推理流程的提示与常量
-- `planner_prompts.py`、`executor_prompts.py`、`reporter_prompts.py`：多智能体任务拆解、执行与报告模板
+- `planner_prompts.py`、`reporter_prompts.py`：多智能体任务拆解与报告模板
 - `__init__.py`：统一导出，提供单一入口 `deepresearch_agent.config.prompts`
 
 ## 模块简介
