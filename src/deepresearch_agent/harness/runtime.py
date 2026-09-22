@@ -10,15 +10,15 @@ from typing import Any, Callable
 
 from deepresearch_agent.harness.budgets import BudgetExceeded, BudgetLimits, BudgetManager
 from deepresearch_agent.harness.checkpoints import CheckpointManager
-from deepresearch_agent.harness.contracts import ContractEvaluator, RunStatus, SourceMode, WorkflowMode
+from deepresearch_agent.harness.contracts import ContractCheckData, ContractEvaluator, RunStatus, SourceMode, WorkflowMode
 from deepresearch_agent.harness.evidence import EvidenceLedger
 from deepresearch_agent.harness.event_bus import EventBus
-from deepresearch_agent.harness.errors import RunCancelled
+from deepresearch_agent.harness.errors import ResearchPauseRequested, RunCancelled
 from deepresearch_agent.harness.recovery import classify_exception, classify_verification_failures
 from deepresearch_agent.harness.run_context import RunContext
 from deepresearch_agent.harness.state_machine import StateMachine
 from deepresearch_agent.context.artifact_edit import ArtifactEditContextBuilder
-from deepresearch_agent.models.prefix_cache import set_current_run
+from deepresearch_agent.models.prefix_cache import set_current_run, mark_run_cancelled
 from deepresearch_agent.harness.report_safety import sanitize_report
 from deepresearch_agent.harness.research_quality import stage_reserves
 from deepresearch_agent.persistence.artifact_store import ArtifactStore
@@ -50,6 +50,7 @@ class HarnessRuntime:
         skill_distiller: Any | None = None,
         prefix_tracker: Any | None = None,
         lease_seconds: int = 90,
+        research_service: Any | None = None,
     ):
         self.runs = run_repository
         self._usage_offsets = {}
@@ -69,6 +70,7 @@ class HarnessRuntime:
         self.prefix_tracker = prefix_tracker
         self.state_machine = StateMachine()
         self.lease_seconds = lease_seconds
+        self.research_service = research_service
 
     def _attach_prefix_usage(self, context: RunContext) -> None:
         """把当前 Run 的前缀缓存用量回填到 budget usage（幂等，可重复调用）。"""
@@ -99,7 +101,11 @@ class HarnessRuntime:
         set_current_run(run_id)
         try:
             context = await self._load_context(run_id)
+            if context.config_snapshot.get('research_required') and (not context.config_snapshot.get('research_study_id') or self.research_service is None):
+                raise ValueError('研究范围尚未初始化，禁止执行研究')
             self._initialize_usage_offset(context)
+            if context.status is RunStatus.AWAITING_SCOPE_APPROVAL:
+                return context
             if context.status in {RunStatus.INTERRUPTED, RunStatus.PAUSED}:
                 resume_target = context.resume_from_status or RunStatus.QUEUED
                 context.resume_from_status = None
@@ -128,6 +134,14 @@ class HarnessRuntime:
                     })
                 else:
                     context.resolved_query = context.resolved_query or context.original_query
+            if self.research_service and context.config_snapshot.get('research_study_id'):
+                if context.config_snapshot.get('research_outline_pending'):
+                    await self._transition(context, RunStatus.OUTLINING)
+                outline_budget = BudgetManager(context.budget_limits, context.budget_usage)
+                if not await self._run_with_heartbeat(context, outline_budget, self.research_service.prepare_outline(context)):
+                    await self._transition(context, RunStatus.AWAITING_SCOPE_APPROVAL)
+                    await self.checkpoints.save(context, 'awaiting_scope_approval')
+                    return context
             driver = self.workflow_factory(context, self.events)
             if inspect.isawaitable(driver):
                 driver = await driver
@@ -329,6 +343,19 @@ class HarnessRuntime:
                             else None
                         ),
                     )
+                    if self.research_service and context.config_snapshot.get('research_study_id'):
+                        study = await self.research_service.store.assert_allowed(run_id)
+                        matrix = await self.research_service.store.matrix(study['study_id'])
+                        coverage_ok = not matrix['counts']['missing'] and not matrix['counts']['stale']
+                        check = ContractCheckData(check_id=f'check_{run_id}_research_coverage', run_id=run_id,
+                            kind='custom', verifier='research_coverage', verifier_version='1', passed=coverage_ok,
+                            observed=matrix['counts'], explanation='当前批准范围的所有适用字段须有有效调查记录')
+                        await self.contracts.repository.upsert(check)
+                        verdict.checks.append(check)
+                        if not coverage_ok:
+                            verdict.passed = False
+                            verdict.recoverable = False
+                            verdict.failures.append('research_coverage')
                     context.workflow_state = driver.snapshot()
                     context.workflow_state["verification_failures"] = verdict.failures
                     await self.checkpoints.save(context, "verifying")
@@ -357,6 +384,9 @@ class HarnessRuntime:
                         },
                     )
                     if verdict.passed:
+                        if self.research_service and context.config_snapshot.get('research_study_id'):
+                            study = await self.research_service.store.assert_allowed(run_id)
+                            await self.research_service.store.set_report(study['study_id'], study['current_revision'], run_id, context.report or '', True)
                         self.state_machine.validate(context.status, RunStatus.COMPLETED, contract_passed=True)
                         context.status = RunStatus.COMPLETED
                         context.budget_usage = budget.usage
@@ -364,6 +394,9 @@ class HarnessRuntime:
                         await self.runs.complete_verified(run_id, assistant_content=context.report or "", usage=budget.snapshot())
                         await self.checkpoints.save(context, "completed")
                         await self.events.publish(run_id, "run.completed", stage="completed", payload={"verified": True})
+                        if self.research_service and context.config_snapshot.get('research_study_id'):
+                            await self.events.publish(run_id, 'research.review_ready', stage='completed',
+                                payload={'study_id': context.config_snapshot['research_study_id'], 'complete': True})
                         if self.memory_extractor is not None:
                             try:
                                 candidates = await self.memory_extractor.extract_from_completed_run(run_id)
@@ -433,6 +466,12 @@ class HarnessRuntime:
                         await self._transition(context, RunStatus.FAILED, event_type="run.failed", error_message=f"Completion Contract 未通过: {', '.join(verdict.failures)}")
 
             return context
+        except ResearchPauseRequested:
+            context.resume_from_status = RunStatus.EXECUTING
+            await self._transition(context, RunStatus.PAUSED, event_type='run.paused')
+            await self.checkpoints.save(context, 'paused')
+            await self.runs.clear_pause_request(run_id)
+            return context
         except (RunCancelled, asyncio.CancelledError):
             assert context is not None
             if context.status is not RunStatus.CANCELLING:
@@ -466,6 +505,8 @@ class HarnessRuntime:
             persisted_status = None if run.status == "pausing" else RunStatus(run.status)
             if persisted_status is RunStatus.INTERRUPTED:
                 restored.resume_from_status = self._safe_stage_after(restored.status)
+                if restored.config_snapshot.get('research_study_id') and restored.status is RunStatus.EXECUTING and not restored.workflow_state.get('research_execution_complete'):
+                    restored.resume_from_status = RunStatus.EXECUTING
                 restored.status = RunStatus.INTERRUPTED
             elif persisted_status is RunStatus.PAUSED:
                 restored.status = RunStatus.PAUSED
@@ -473,6 +514,11 @@ class HarnessRuntime:
                 restored.status = persisted_status
             restored.cancellation_requested = bool(run.cancellation_requested)
             restored.config_snapshot.update(json.loads(run.config_snapshot_json or "{}"))
+            restored.budget_limits = BudgetLimits.model_validate(json.loads(run.budget_json or '{}'))
+            if self.research_service and restored.config_snapshot.get('research_study_id'):
+                used = await self.research_service.store.run_usage(run_id)
+                restored.budget_usage.llm_tokens = max(restored.budget_usage.llm_tokens, used['llm_tokens'])
+                restored.budget_usage.elapsed_seconds = max(restored.budget_usage.elapsed_seconds, used['active_seconds'])
             return restored
         message = await self.messages.get(run.trigger_message_id)
         if message is None:
@@ -561,11 +607,18 @@ class HarnessRuntime:
                 context.budget_usage = budget.usage
                 budget.assert_available()
                 await self.runs.update_usage(context.run_id, budget.snapshot())
+                if self.research_service and context.config_snapshot.get('research_study_id'):
+                    await self.research_service.store.record_usage(context.run_id, context.budget_usage.llm_tokens, context.budget_usage.elapsed_seconds)
+                    study = await self.research_service.store.for_run(context.run_id)
+                    for metric, key in [('llm_tokens', 'max_llm_tokens'), ('active_seconds', 'max_active_seconds')]:
+                        if study['usage'][metric] > study['spec']['budget'][key]:
+                            raise BudgetExceeded(metric, study['usage'][metric], study['spec']['budget'][key])
                 if not task.done():
                     await self._assert_not_cancelled(context)
             return await task
         finally:
             if not task.done():
+                mark_run_cancelled(context.run_id)
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
 
@@ -592,6 +645,10 @@ class HarnessRuntime:
         }
         published_evidence_ids = {item.evidence_id for item in await self.evidence_repository.list_for_run(context.run_id)}
         records = driver.execution_records()
+        if context.config_snapshot.get('research_study_id'):
+            calls = {c.tool_call_id: c for r in records for c in r.tool_calls}
+            budget.usage.tool_calls = max(budget.usage.tool_calls, len(calls))
+            budget.usage.tavily_calls = max(budget.usage.tavily_calls, sum(c.source_mode == 'web' for c in calls.values()))
         reported_tokens = sum(
             self._token_usage_total(record.metadata.token_usage)
             for record in records
@@ -608,7 +665,8 @@ class HarnessRuntime:
                 existing = await self.trajectory.get_tool_call(call.tool_call_id) if self.trajectory else None
                 if existing is not None and existing.status == "completed":
                     continue
-                budget.consume_tool(tavily=call.source_mode == "web")
+                if not context.config_snapshot.get('research_study_id'):
+                    budget.consume_tool(tavily=call.source_mode == "web")
                 if self.trajectory:
                     await self.trajectory.prepare_tool_call(tool_call_id=call.tool_call_id, run_id=context.run_id, task_id=record.task_id, tool_name=call.tool_name, source_mode=context.source_mode.value, args=call.args)
                     await self.trajectory.complete_tool_call(call.tool_call_id, result=call.result, error_code="TOOL_FAILED" if call.status == "failed" else None)

@@ -38,3 +38,7 @@ class AppError(RuntimeError):
 
 class RunCancelled(RuntimeError):
     """Internal cooperative-cancellation signal; never exposed as a failure."""
+
+
+class ResearchPauseRequested(RuntimeError):
+    """Stop only after a research unit's evidence has been committed."""

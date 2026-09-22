@@ -42,13 +42,18 @@ class SkillLearningService:
     async def enqueue_for_run(self, run_id: str):
         if not self.enabled:
             return None
+        from deepresearch_agent.research.storage import ResearchStore
+        study = await ResearchStore(self.database).for_run(run_id)
+        if study and (not study.get('acceptance') or not study.get('report') or study['report']['run_id'] != run_id):
+            return None
         async with self.database.sessions() as session:
             run = await session.get(RunModel, run_id)
             if run is None or run.status not in self.TERMINAL_RUN_STATUSES:
                 return None
-            terminal_event_id = int((await session.execute(select(func.max(RunEventModel.event_id)).where(
-                RunEventModel.run_id == run_id
-            ))).scalar_one_or_none() or 0)
+            terminal_query = select(func.max(RunEventModel.event_id)).where(RunEventModel.run_id == run_id)
+            if study:
+                terminal_query = terminal_query.where(RunEventModel.event_type == 'research.accepted')
+            terminal_event_id = int((await session.execute(terminal_query)).scalar_one_or_none() or 0)
             tool_count = int((await session.execute(select(func.count()).select_from(ToolCallModel).where(
                 ToolCallModel.run_id == run_id
             ))).scalar_one())

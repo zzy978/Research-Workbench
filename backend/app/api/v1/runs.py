@@ -111,7 +111,10 @@ async def require_run(database, run_id: str):
 
 @router.get("/{run_id}")
 async def get_run(run_id: str, database=Depends(get_database)):
-    return run_dict(await require_run(database, run_id))
+    run = await require_run(database, run_id)
+    payload = run_dict(run)
+    payload['study_id'] = json.loads(run.config_snapshot_json or '{}').get('research_study_id')
+    return payload
 
 
 @router.post("/{run_id}/cancel", response_model=RunControl)

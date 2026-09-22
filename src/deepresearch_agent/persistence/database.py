@@ -50,6 +50,7 @@ class Database:
     async def create_schema(self) -> None:
         """Create schema for tests/dev; deployed environments use Alembic."""
         from .models import Base
+        from deepresearch_agent.research.storage import RESEARCH_TABLES  # noqa: F401
         from .fts import install_fts
 
         async with self.engine.begin() as connection:

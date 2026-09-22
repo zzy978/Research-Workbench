@@ -23,7 +23,7 @@ export const api = {
   patchSession: (id: string, payload: {title?: string; status?: string}) => request<Session>(`/sessions/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteSession: (id: string) => request<void>(`/sessions/${id}`, { method: "DELETE" }),
   send: (sessionId: string, payload: {client_message_id: string; content: string; source_mode: SourceMode; workflow_mode: WorkflowMode}) =>
-    request<{message_id: string; run_id: string; status: string; events_url: string}>(`/sessions/${sessionId}/messages`, { method: "POST", body: JSON.stringify(payload) }),
+    request<{message_id: string; run_id: string; status: string; events_url: string; study_id?: string | null}>(`/sessions/${sessionId}/messages`, { method: "POST", body: JSON.stringify(payload) }),
   run: (id: string) => request<Run>(`/runs/${id}`),
   cancel: (id: string) => request(`/runs/${id}/cancel`, { method: "POST" }),
   pause: (id: string) => request(`/runs/${id}/pause`, { method: "POST" }),

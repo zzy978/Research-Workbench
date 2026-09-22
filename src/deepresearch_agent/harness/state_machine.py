@@ -15,7 +15,9 @@ class InvalidTransition(ValueError):
 class StateMachine:
     transitions = {
         RunStatus.QUEUED: {RunStatus.CONTEXT_BUILDING, RunStatus.PAUSED, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED},
-        RunStatus.CONTEXT_BUILDING: {RunStatus.PLANNING, RunStatus.PAUSED, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
+        RunStatus.CONTEXT_BUILDING: {RunStatus.OUTLINING, RunStatus.AWAITING_SCOPE_APPROVAL, RunStatus.PLANNING, RunStatus.PAUSED, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
+        RunStatus.OUTLINING: {RunStatus.AWAITING_SCOPE_APPROVAL, RunStatus.PAUSED, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
+        RunStatus.AWAITING_SCOPE_APPROVAL: {RunStatus.QUEUED, RunStatus.CANCELLING, RunStatus.FAILED},
         RunStatus.PLANNING: {RunStatus.EXECUTING, RunStatus.PAUSED, RunStatus.NEEDS_USER_INPUT, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
         RunStatus.EXECUTING: {RunStatus.EXECUTING, RunStatus.RETRYING, RunStatus.REPLANNING, RunStatus.REPORTING, RunStatus.PAUSED, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
         RunStatus.RETRYING: {RunStatus.EXECUTING, RunStatus.PAUSED, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},

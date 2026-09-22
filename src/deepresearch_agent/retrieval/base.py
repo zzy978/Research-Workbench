@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Literal, Optional, Protocol, Sequence
+from typing import Any, Awaitable, Callable, Literal, Optional, Protocol, Sequence
 
 from deepresearch_agent.agents.multi_agent.core.retrieval_result import RetrievalResult
 from deepresearch_agent.harness.contracts import SourceMode
@@ -34,6 +34,9 @@ class ToolCallContext:
     source_mode: SourceMode
     task_id: Optional[str] = None
     tool_call_id: Optional[str] = None
+    # Internal capability installed by the host; never populated from model arguments.
+    before_request: Callable[[], Awaitable[None]] | None = field(default=None, repr=False, compare=False)
+    on_cache_hit: Callable[[], Awaitable[None]] | None = field(default=None, repr=False, compare=False)
 
 
 class RetrievalProvider(Protocol):

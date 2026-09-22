@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit -p tsconfig.app.json && vite build",
+    "test:research": "node --test --experimental-strip-types tests/research-state.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

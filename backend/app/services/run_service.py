@@ -13,6 +13,7 @@ from deepresearch_agent.agents.multi_agent.executor.worker_coordinator import Wo
 from deepresearch_agent.config.settings import ARTIFACT_ROOT, AUTO_RESUME_RUNS
 from deepresearch_agent.harness.contracts import SourceMode, WorkflowMode
 from deepresearch_agent.harness.event_bus import EventBus
+from deepresearch_agent.harness.errors import AppError
 from deepresearch_agent.harness.recovery import RecoveryManager
 from deepresearch_agent.harness.runtime import HarnessRuntime
 from deepresearch_agent.harness.workflow import DeepResearchDriver, PlanExecuteReportDriver
@@ -53,6 +54,9 @@ class RunService:
         self._external_factory = workflow_factory
         self._router = None if workflow_factory else create_default_router()
         self._tasks: dict[str, asyncio.Task] = {}
+        self.research_model = None
+        from backend.app.services.research_service import ResearchService
+        self.research = ResearchService(self)
         memory_repository = MemoryRepository(database)
         memory_service = MemoryService(
             memory_repository, AuditRepository(database),
@@ -138,12 +142,22 @@ class RunService:
 
     async def _execute(self, run_id: str):
         agents: list[Any] = []
+        initial = await self.runs.get(run_id)
+        initial_config = json.loads(initial.config_snapshot_json or '{}') if initial else {}
+        if initial_config.get('research_required') and not initial_config.get('research_study_id'):
+            message = await self.messages.get(initial.trigger_message_id)
+            await self.research.create(initial, message.content)
 
-        def workflow_factory(context, events=None):
+        def base_workflow_factory(context, events=None):
             if self._external_factory is not None:
                 return self._external_factory(context, events)
+            raw_provider = self._router.for_mode(context.source_mode)
+            if context.config_snapshot.get('research_study_id'):
+                from deepresearch_agent.research.guard import ResearchProvider
+                raw_provider = ResearchProvider(raw_provider, self.research.store, context.run_id,
+                    targets=context.config_snapshot.get('research_unit'), events=events)
             provider = TimeoutBoundProvider(
-                self._router.for_mode(context.source_mode),
+                raw_provider,
                 timeout_seconds=context.budget_limits.tool_timeout_seconds,
             )
             if context.workflow_mode is WorkflowMode.DEEP_RESEARCH:
@@ -157,6 +171,12 @@ class RunService:
             bundle = MultiAgentFactory.create_default_bundle(retrieval_provider=provider, worker=worker)
             return PlanExecuteReportDriver(context, bundle.orchestrator, events=events)
 
+        def workflow_factory(context, events=None):
+            if context.config_snapshot.get('research_study_id'):
+                from deepresearch_agent.research.workflow import ResearchWorkflow
+                return ResearchWorkflow(context, self.research, base_workflow_factory, events)
+            return base_workflow_factory(context, events)
+
         runtime = HarnessRuntime(
             run_repository=self.runs, message_repository=self.messages,
             event_repository=self.events, checkpoint_repository=CheckpointRepository(self.database),
@@ -166,16 +186,24 @@ class RunService:
             event_bus=self.event_bus,
             context_builder=self.context_builder, memory_extractor=self.memory_extractor, skill_distiller=None,
             prefix_tracker=prefix_tracker,
+            research_service=self.research,
         )
+        context = None
         try:
-            return await runtime.execute_run(run_id)
+            context = await runtime.execute_run(run_id)
+            return context
         finally:
             for agent in agents:
                 if hasattr(agent, "close"):
                     agent.close()
             run = await self.runs.get(run_id)
             config = json.loads(run.config_snapshot_json or "{}") if run else {}
-            if not config.get("evaluation_run") and run and run.status not in {"paused", "pausing"}:
+            if config.get('research_study_id') and context is not None:
+                runtime._attach_prefix_usage(context)
+                await self.research.store.record_usage(run_id, context.budget_usage.llm_tokens, context.budget_usage.elapsed_seconds)
+                if run.status in {'failed', 'budget_exhausted', 'cancelled'}:
+                    await self._save_research_report(run, context)
+            if not config.get('research_study_id') and not config.get("evaluation_run") and run and run.status not in {"paused", "pausing", "awaiting_scope_approval", "outlining"}:
                 await self.skill_learning.enqueue_for_run(run_id)
                 snapshot = json.loads(run.model_snapshot_json or "{}") if run else {}
                 selected = snapshot.get("skill") if isinstance(snapshot, dict) else None
@@ -186,6 +214,22 @@ class RunService:
                         name=str(selected.get("name")), version=str(selected.get("version")),
                         succeeded=bool(run and run.status == "completed"), safety_violation=safety_violation,
                     )
+
+    async def _save_research_report(self, run, context):
+        from deepresearch_agent.research.workflow import ResearchWorkflow
+        study = await self.research.store.for_run(run.run_id)
+        if study is None or study['approved_revision'] != study['current_revision']:
+            return
+        try:
+            await self.research.store.assert_allowed(run.run_id)
+        except AppError:
+            return
+        matrix = await self.research.store.matrix(study['study_id'])
+        content = context.report or ResearchWorkflow.render(study['spec'], matrix, matrix['cells'])
+        complete = run.status == 'completed' and not matrix['counts']['missing'] and not matrix['counts']['stale']
+        await self.research.store.set_report(study['study_id'], study['current_revision'], run.run_id, content, complete)
+        await self.event_bus.publish(run.run_id, 'research.review_ready', stage='completed',
+            payload={'study_id': study['study_id'], 'complete': complete})
 
     async def run_evaluation_case(self, *, query: str, source_mode: str, workflow_mode: str, forced_skill=None) -> dict[str, Any]:
         """Execute one isolated real Harness Run for paired Skill evaluation."""
@@ -244,14 +288,16 @@ class RunService:
         task = self._tasks.get(run_id)
         if task is not None and not task.done():
             task.cancel()
-        else:
-            run = await self.runs.get(run_id)
-            if run is not None:
-                await self.runs.update_status(
-                    run_id, status="cancelled", current_stage="cancelled",
-                    usage=json.loads(run.usage_json or "{}"),
-                )
-                await self.event_bus.publish(run_id, "run.cancelled", stage="cancelled", payload={"status": "cancelled"})
+            await asyncio.gather(task, return_exceptions=True)
+        run = await self.runs.get(run_id)
+        if run is not None and run.status not in {'completed', 'failed', 'cancelled', 'budget_exhausted'}:
+            # Cancellation can arrive after Runtime returned a waiting checkpoint,
+            # while its scheduler task is still persisting final accounting.
+            await self.runs.update_status(
+                run_id, status="cancelled", current_stage="cancelled",
+                usage=json.loads(run.usage_json or "{}"),
+            )
+            await self.event_bus.publish(run_id, "run.cancelled", stage="cancelled", payload={"status": "cancelled"})
         return True
 
     async def pause(self, run_id: str) -> bool:
@@ -273,6 +319,9 @@ class RunService:
 
     async def resume(self, run_id: str, *, clarification: str | None = None) -> bool:
         before = await self.runs.get(run_id)
+        study = await self.research.store.for_run(run_id)
+        if study:
+            await self.research.store.assert_allowed(run_id)
         pending_pause = bool(
             before and json.loads(before.config_snapshot_json or "{}").get("pause_requested")
         )

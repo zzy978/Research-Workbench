@@ -167,7 +167,7 @@ class MessageRepository:
 
 
 class RunRepository:
-    ACTIVE_STATUSES = ("queued", "context_building", "planning", "executing", "reporting", "verifying", "retrying", "replanning", "pausing", "cancelling")
+    ACTIVE_STATUSES = ("queued", "context_building", "outlining", "planning", "executing", "reporting", "verifying", "retrying", "replanning", "pausing", "cancelling")
 
     def __init__(self, database: Database):
         self.database = database
@@ -318,7 +318,7 @@ class RunRepository:
 
     async def request_cancel(self, run_id: str) -> bool:
         async with self.database.transaction() as session:
-            result = await session.execute(update(RunModel).where(RunModel.run_id == run_id, RunModel.status.in_(self.ACTIVE_STATUSES + ("paused",))).values(cancellation_requested=1, updated_at=utc_now_iso()))
+            result = await session.execute(update(RunModel).where(RunModel.run_id == run_id, RunModel.status.in_(self.ACTIVE_STATUSES + ("paused", "awaiting_scope_approval"))).values(cancellation_requested=1, updated_at=utc_now_iso()))
             return result.rowcount == 1
 
     async def request_pause(self, run_id: str) -> bool:

@@ -76,14 +76,19 @@ class TavilyProvider:
         })
         cached = self._read_cache(args)
         if cached is None:
-            raw = self._sanitize_external(await self._search_with_retry(args))
+            raw = self._sanitize_external(await self._search_with_retry(args, before_request=call_context.before_request))
             self._write_cache(args, raw)
         else:
             raw = self._sanitize_external(cached)
+            if call_context.on_cache_hit is not None:
+                await call_context.on_cache_hit()
         artifact = self._store_raw(call_context, raw)
-        return self._map_results(raw, artifact=artifact, query=str(args["query"]))[: int(args["top_k"])]
+        results = self._map_results(raw, artifact=artifact, query=str(args["query"]))[: int(args["top_k"])]
+        for result in results:
+            result.metadata.extra['cache_hit'] = cached is not None
+        return results
 
-    async def _search_with_retry(self, args: dict[str, Any]) -> dict[str, Any]:
+    async def _search_with_retry(self, args: dict[str, Any], *, before_request=None) -> dict[str, Any]:
         call_args = {
             "query": args["query"],
             "search_depth": args["search_depth"],
@@ -96,6 +101,9 @@ class TavilyProvider:
             if args.get(name):
                 call_args[name] = args[name]
         for attempt in range(3):
+            # A denied reservation is not a transport failure and must not be retried.
+            if before_request is not None:
+                await before_request()
             try:
                 response = await asyncio.to_thread(self._client.search, **call_args)
                 if not isinstance(response, dict):
@@ -152,6 +160,8 @@ class TavilyProvider:
             extra = {
                 "untrusted_external_content": True,
                 "content_truncated": len(normalized) > 12000,
+                "access": "full_text" if item.get("raw_content") and len(normalized) <= 12000 else "snippet",
+                "body_available": bool(item.get("raw_content")),
             }
             domain = domain_from_url(url)
             query_terms = {

@@ -26,6 +26,8 @@ class WorkflowMode(str, Enum):
 class RunStatus(str, Enum):
     QUEUED = "queued"
     CONTEXT_BUILDING = "context_building"
+    OUTLINING = "outlining"
+    AWAITING_SCOPE_APPROVAL = "awaiting_scope_approval"
     PLANNING = "planning"
     EXECUTING = "executing"
     REPORTING = "reporting"

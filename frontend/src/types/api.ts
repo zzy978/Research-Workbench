@@ -5,6 +5,7 @@ export interface Session { session_id: string; title: string; status: string; me
 export interface Message { message_id: string; run_id?: string | null; role: string; content: string; metadata_json: string; created_at: string; }
 export interface Run {
   run_id: string; source_mode: SourceMode; workflow_mode: WorkflowMode; status: string; current_stage?: string | null;
+  study_id?: string | null;
   error_code?: string | null; error_message?: string | null; cancellation_requested?: boolean; pause_requested?: boolean; created_at: string; updated_at: string;
   usage?: RunUsage | null;
 }

@@ -9,6 +9,7 @@ import { ErrorState } from "../components/ErrorState";
 import { EvidenceDrawer } from "../components/EvidenceDrawer";
 import { FloatingComposer } from "../components/FloatingComposer";
 import { MessageStrip } from "../components/MessageStrip";
+import { ResearchWorkbench } from "../components/ResearchWorkbench";
 import { SourceSelector } from "../components/SourceSelector";
 import { WhiteboardDrawer } from "../components/WhiteboardDrawer";
 import { arrivedStages, STAGES, StageMeta, StageState, stageCardId } from "../components/stageMeta";
@@ -132,6 +133,7 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
   const [source, setSource] = useState<SourceMode>(() => (localStorage.getItem("source_mode") as SourceMode) || "graphrag");
   const [workflow, setWorkflow] = useState<WorkflowMode>("deep_research");
   const [runId, setRunId] = useState<string | null>(null);
+  const [studyId, setStudyId] = useState<string | null>(null);
   const [selectedEvidence, setSelectedEvidence] = useState<Evidence | null>(null);
   const [selectedStage, setSelectedStage] = useState<string | null>(null);
   const [whiteboardOpen, setWhiteboardOpen] = useState(false);
@@ -156,16 +158,22 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
   useEffect(() => { localStorage.setItem("chat.stripCollapsed", stripCollapsed ? "1" : "0"); }, [stripCollapsed]);
   useEffect(() => { localStorage.setItem("chat.composerCollapsed", composerCollapsed ? "1" : "0"); }, [composerCollapsed]);
   useEffect(() => {
-    setRunId(null); setSelectedEvidence(null); setSelectedStage(null); setPausing(false); setCancelling(false); setResuming(false); setError(null);
+    if (!studyId) return;
+    setStripCollapsed(true);
+    setComposerCollapsed(true);
+  }, [studyId]);
+  useEffect(() => {
+    setRunId(null); setStudyId(null); setSelectedEvidence(null); setSelectedStage(null); setPausing(false); setCancelling(false); setResuming(false); setError(null);
   }, [sessionId]);
   useEffect(() => {
     if (!detail.data || detail.data.session_id !== sessionId || runId) return;
     const latest = detail.data.runs.find((item) => !TERMINAL.includes(item.status)) ?? detail.data.runs[0];
-    if (latest) setRunId(latest.run_id);
+    if (latest) { setRunId(latest.run_id); setStudyId(latest.study_id ?? null); }
   }, [detail.data, runId, sessionId]);
   useEffect(() => {
     if (!run) return;
     setSource(run.source_mode); setWorkflow(run.workflow_mode);
+    setStudyId(run.study_id ?? null);
     if (run.status === "paused" || (!run.pause_requested && run.status !== "pausing")) setPausing(false);
     if (run.status === "cancelled") setCancelling(false);
     if (run.status !== "paused" && run.status !== "pausing") setResuming(false);
@@ -217,7 +225,7 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
     try {
       const result = await api.send(sessionId, { client_message_id: crypto.randomUUID(), content: text.trim(), source_mode: source, workflow_mode: workflow });
       const sameRun = result.run_id === runId;
-      setText(""); setRunId(result.run_id);
+      setText(""); setRunId(result.run_id); setStudyId(result.study_id ?? null);
       if (sameRun) restart();
       await queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
     } catch (caught) { setError(caught); } finally { setSending(false); }
@@ -251,7 +259,21 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
   }
 
   function openEvidence(item: Evidence) { setSelectedEvidence(item); }
-  function openMessageReport(messageRunId: string) { setRunId(messageRunId); setSelectedEvidence(null); setSelectedStage("reporting"); }
+  async function openStudyEvidence(evidenceId: string, evidenceRunId?: string) {
+    const targetRunId = evidenceRunId ?? runId;
+    if (!targetRunId) return;
+    setError(null);
+    try {
+      const result = await api.evidence(targetRunId);
+      const item = result.items.find((entry) => entry.evidence_id === evidenceId);
+      if (!item) throw new Error("未找到这条证据，它可能来自尚未加载的历史研究。");
+      setSelectedEvidence(item);
+    } catch (caught) { setError(caught); }
+  }
+  function openMessageReport(messageRunId: string) {
+    const messageRun = messageRuns.get(messageRunId);
+    setRunId(messageRunId); setStudyId(messageRun?.study_id ?? null); setSelectedEvidence(null); setSelectedStage("reporting");
+  }
 
   function cardContent(stage: StageMeta): ReactNode {
     switch (stage.id) {
@@ -329,7 +351,11 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
     </details>}
 
     <div className="chat-body">
-      <CanvasBoard
+      {studyId ? <ResearchWorkbench
+        studyId={studyId}
+        onRun={(nextRunId) => { setRunId(nextRunId); setSelectedStage(null); }}
+        onEvidence={openStudyEvidence}
+      /> : <CanvasBoard
         runId={runId}
         arrived={arrived}
         positions={positions}
@@ -338,7 +364,7 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
         cardContent={cardContent}
         onSelectCard={setSelectedStage}
         dragMovedRef={dragMovedRef}
-      />
+      />}
       <MessageStrip collapsed={stripCollapsed} onToggle={() => setStripCollapsed((value) => !value)} messages={detail.data?.messages ?? []} runs={messageRuns} onOpenReport={openMessageReport} />
     </div>
 

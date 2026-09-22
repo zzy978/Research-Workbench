@@ -1,6 +1,7 @@
 """Transactional chat command service."""
 
 import re
+import json
 
 from backend.app.schemas import MessageCreate, MessageSend, RunAccepted, RunCreate
 from deepresearch_agent.config.settings import HARNESS_BUDGETS, LEARNING_REVIEW_MODEL, OPENAI_LLM_MODEL
@@ -85,10 +86,16 @@ class ChatService:
                     "report_type": "long_document" if detailed_request else request.report_type,
                     "deep_research_max_iterations": 1 if request.source_mode.value == "graphrag" else 2,
                     "schema_version": 1,
+                    "research_required": request.source_mode.value == 'web',
                 },
                 budget=HARNESS_BUDGETS,
             ),
         )
+        if json.loads(run.config_snapshot_json or '{}').get('research_required'):
+            if not json.loads(run.config_snapshot_json or '{}').get('research_study_id'):
+                await self.run_service.research.create(run, request.content)
+            if not created and run.status == 'queued':
+                self.run_service.schedule(run.run_id)
         if created:
             await self.runs.update_model_snapshot(run.run_id, {
                 "llm_model": OPENAI_LLM_MODEL,
@@ -102,4 +109,5 @@ class ChatService:
         return RunAccepted(
             message_id=message.message_id, run_id=run.run_id, status=run.status,
             events_url=f"/api/v1/runs/{run.run_id}/events", created=created,
+            study_id=(await self.run_service.research.store.for_run(run.run_id) or {}).get('study_id'),
         )

@@ -48,6 +48,7 @@ class RunAccepted(ApiModel):
     status: str
     events_url: str
     created: bool
+    study_id: str | None = None
 
 
 class RunControl(ApiModel):
