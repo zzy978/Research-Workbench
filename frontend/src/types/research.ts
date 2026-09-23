@@ -35,6 +35,16 @@ export interface ResearchRunRef {
   purpose: string;
 }
 
+export interface ResearchRevisionRef {
+  revision: number;
+  fingerprint: string;
+}
+
+export interface ResearchRevision extends ResearchRevisionRef {
+  study_id: string;
+  spec: ResearchSpec;
+}
+
 export interface ResearchReport {
   run_id: string;
   fingerprint: string;
@@ -136,15 +146,15 @@ export function normalizeResearchDiff(diff: unknown): SpecChange[] {
     }
     if (!value || typeof value !== "object") return;
     const record = value as Record<string, unknown>;
+    if (Array.isArray(record.changes)) {
+      visit(record.changes, fallbackPath);
+      return;
+    }
     if (Array.isArray(record.changed_fields)) {
       const previous = typeof record.previous_revision === "number" ? `第 ${record.previous_revision} 版` : "上一版";
       record.changed_fields.forEach((path) => {
         if (typeof path === "string") rows.push({path, before: previous, after: "当前版本已修改"});
       });
-      return;
-    }
-    if (Array.isArray(record.changes)) {
-      visit(record.changes, fallbackPath);
       return;
     }
     const rawPath = typeof record.path === "string" ? record.path : fallbackPath;
@@ -172,6 +182,8 @@ export function normalizeResearchDiff(diff: unknown): SpecChange[] {
 
 export function researchErrorMessage(error: unknown): string {
   if (error && typeof error === "object" && "code" in error && error.code === "CONFLICT") {
+    const message = "message" in error && typeof error.message === "string" ? error.message : "";
+    if (message && !message.includes("研究范围已更新")) return message;
     return "课题已被其他操作更新。你的输入仍保留，请刷新后重新提交。";
   }
   if (error instanceof Error && error.message) return error.message;

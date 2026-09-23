@@ -134,23 +134,41 @@ class ResearchService:
                 if not done:
                     raise AppError(ErrorCode.CONFLICT, '正在保存当前进度，请稍后重试修改')
 
+    async def _current_for_edit(self, study_id, payload):
+        current = await self.store.get(study_id)
+        if payload.revision != current['current_revision'] or payload.fingerprint != current['fingerprint']:
+            raise AppError(ErrorCode.CONFLICT, '研究范围已更新，请刷新后修改')
+        return current
+
+    async def _save_revision(self, current, payload, spec):
+        study_id = current['study_id']
+        revised = await self.store.revise(study_id, payload.revision, payload.fingerprint, spec)
+        run = await self.owner.runs.get(current['run_id']) if current.get('run_id') else None
+        if run and run.status == 'awaiting_scope_approval':
+            await self.store.link_run(study_id, revised['current_revision'], run.run_id, purpose='outline')
+            await self._configure(run.run_id, revised)
+        if run:
+            await self.owner.event_bus.publish(run.run_id, 'research.outline_ready', stage='outline',
+                payload={'study_id': study_id, 'revision': revised['current_revision']})
+        return await self.store.get(study_id)
+
+    async def restore(self, study_id, payload):
+        async with self.lock(study_id):
+            current = await self._current_for_edit(study_id, payload)
+            if payload.source_revision == current['current_revision']:
+                raise AppError(ErrorCode.CONFLICT, '所选版本已是当前版本，无需回退')
+            source = await self.store.get_revision(study_id, payload.source_revision)
+            await self._freeze(current)
+            return await self._save_revision(current, payload, source['spec'])
+
     async def revise(self, study_id, payload):
         async with self.lock(study_id):
-            current = await self.store.get(study_id)
-            if payload.revision != current['current_revision'] or payload.fingerprint != current['fingerprint']:
-                raise AppError(ErrorCode.CONFLICT, '研究范围已更新，请刷新后修改')
+            current = await self._current_for_edit(study_id, payload)
             await self._freeze(current)
             spec = payload.spec
             if spec is None:
                 spec = await self.call_model(current['run_id'], 'draft', current['spec']['title'], previous=current['spec'], instruction=payload.instruction)
-            revised = await self.store.revise(study_id, payload.revision, payload.fingerprint, spec)
-            run = await self.owner.runs.get(current['run_id']) if current.get('run_id') else None
-            if run and run.status == 'awaiting_scope_approval':
-                await self.store.link_run(study_id, revised['current_revision'], run.run_id, purpose='outline')
-                await self._configure(run.run_id, revised)
-            await self.owner.event_bus.publish(run.run_id, 'research.outline_ready', stage='outline',
-                payload={'study_id': study_id, 'revision': revised['current_revision']})
-            return await self.store.get(study_id)
+            return await self._save_revision(current, payload, spec)
 
     async def approve(self, study_id, payload):
         async with self.lock(study_id):

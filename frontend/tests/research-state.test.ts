@@ -33,8 +33,9 @@ test("本地差异按字段路径统计并忽略未变化值", () => {
 
 test("冲突错误给出保留用户输入的恢复提示", () => {
   assert.equal(typeof research.researchErrorMessage, "function");
-  assert.equal(research.researchErrorMessage({ code: "CONFLICT", message: "stale" }), "课题已被其他操作更新。你的输入仍保留，请刷新后重新提交。");
+  assert.equal(research.researchErrorMessage({ code: "CONFLICT", message: "研究范围已更新，请刷新后修改" }), "课题已被其他操作更新。你的输入仍保留，请刷新后重新提交。");
   assert.equal(research.researchErrorMessage(new Error("网络中断")), "网络中断");
+  assert.equal(research.researchErrorMessage({code: "CONFLICT", message: "正在保存当前进度，请稍后重试修改"}), "正在保存当前进度，请稍后重试修改");
 });
 
 test("服务端差异会归一化为可读的前后值", () => {
@@ -49,4 +50,11 @@ test("服务端差异会归一化为可读的前后值", () => {
     {path: "questions", before: "第 2 版", after: "当前版本已修改"},
     {path: "fields", before: "第 2 版", after: "当前版本已修改"},
   ]);
+});
+
+test("有完整前后值时优先展示实际差异而非字段变化占位提示", () => {
+  assert.deepEqual(research.normalizeResearchDiff({
+    changed_fields: ["title"], previous_revision: 2,
+    changes: [{path: "title", before: "旧课题", after: "新课题"}],
+  }), [{path: "title", before: "旧课题", after: "新课题"}]);
 });

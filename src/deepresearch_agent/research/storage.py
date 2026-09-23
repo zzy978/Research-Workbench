@@ -185,6 +185,22 @@ class ResearchStore:
         async with self.database.sessions() as session:
             return await self._view(session, await self._study(session, study_id))
 
+    async def revisions(self, study_id):
+        async with self.database.sessions() as session:
+            await self._study(session, study_id)
+            rows = await session.execute(select(RevisionModel.revision, RevisionModel.fingerprint)
+                .where(RevisionModel.study_id == study_id).order_by(RevisionModel.revision.desc()))
+            return [{'revision': row.revision, 'fingerprint': row.fingerprint} for row in rows]
+
+    async def get_revision(self, study_id, revision):
+        async with self.database.sessions() as session:
+            await self._study(session, study_id)
+            row = await session.get(RevisionModel, (study_id, revision))
+            if row is None:
+                raise AppError(ErrorCode.NOT_FOUND, '研究版本不存在')
+            return {'study_id': study_id, 'revision': row.revision,
+                    'fingerprint': row.fingerprint, 'spec': json.loads(row.spec_json)}
+
     async def for_run(self, run_id):
         async with self.database.sessions() as session:
             link = await session.scalar(select(ResearchRunModel).where(ResearchRunModel.run_id == run_id))
@@ -505,4 +521,6 @@ class ResearchStore:
                 "approved_revision": study.approved_revision, "approved_fingerprint": study.approved_fingerprint,
                 "run_id": links[-1].run_id if links else None,
                 "runs": [{"run_id": link.run_id, "revision": link.revision, "purpose": link.purpose} for link in links],
-                "usage": self._usage(links), "report": report, "acceptance": acceptance, "diff": {"changed_fields": changed, "previous_revision": study.current_revision - 1 if previous else None}}
+                "usage": self._usage(links), "report": report, "acceptance": acceptance,
+                "diff": {"changed_fields": changed, "previous_revision": study.current_revision - 1 if previous else None,
+                         "changes": [{"path": key, "before": previous_spec.get(key), "after": current_spec[key]} for key in changed]}}

@@ -468,12 +468,27 @@ button { cursor: pointer; }
 .rw-usage span { min-width: 92px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); font-size: 10px; box-shadow: var(--shadow-xs); }
 .rw-usage b { display: block; margin-top: 3px; color: var(--text-primary); font: 600 16px var(--font-mono); }
 
-.rw-tabs { display: grid; grid-template-columns: repeat(3, 1fr); margin-bottom: 14px; padding: 5px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-xs); }
+.rw-tabs { display: grid; grid-template-columns: repeat(3, 1fr) minmax(120px, .8fr); margin-bottom: 14px; padding: 5px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-xs); }
 .rw-tabs button { min-height: 52px; display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 7px 12px; border: 0; border-radius: 8px; color: var(--text-secondary); background: transparent; text-align: left; font-size: 13px; font-weight: 600; transition: background var(--dur-fast), color var(--dur-fast); }
 .rw-tabs button:hover { background: var(--surface-hover); }
 .rw-tabs button.active { color: var(--accent-strong); background: var(--accent-soft); }
 .rw-tabs button > span { width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid currentColor; border-radius: 50%; font: 600 11px var(--font-mono); }
 .rw-tabs button small { color: var(--text-tertiary); font-size: 10px; font-weight: 500; }
+.rw-tabs button:last-child { grid-template-columns: 1fr auto; }
+.rw-history-panel { display: grid; gap: 18px; }
+.rw-history-select { display: grid; gap: 8px; max-width: 320px; color: var(--text-secondary); }
+.rw-history-select select { min-height: 44px; padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: 8px; color: var(--text-primary); background: var(--surface); font: inherit; }
+.rw-history-snapshot h4, .rw-history-diff h4 { margin: 0 0 12px; }
+.rw-history-snapshot dl { margin: 0; display: grid; gap: 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.rw-history-snapshot dl > div { padding: 14px; border-bottom: 1px solid var(--divider); }
+.rw-history-snapshot dl > div:last-child { border-bottom: 0; }
+.rw-history-snapshot dt { margin-bottom: 6px; font-weight: 600; }
+.rw-history-snapshot dd { margin: 0; color: var(--text-secondary); line-height: 1.7; overflow-wrap: anywhere; white-space: pre-wrap; }
+.rw-history-snapshot ul { margin: 0; padding-left: 20px; }
+.rw-history-diff .rw-change-list { max-height: none; }
+.rw-history-restore { padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.rw-history-restore p { margin: 0 0 12px; color: var(--text-secondary); line-height: 1.6; }
+.rw-history-restore button { min-height: 44px; margin: 0 8px 8px 0; }
 
 .rw-panel { min-height: 480px; padding: 22px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow-sm); }
 .rw-spec-layout { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(290px, .7fr); gap: 22px; align-items: start; }

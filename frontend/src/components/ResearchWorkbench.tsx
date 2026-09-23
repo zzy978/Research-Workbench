@@ -14,7 +14,7 @@ interface Props {
   onEvidence: (evidenceId: string, runId?: string) => void;
 }
 
-type Tab = "spec" | "matrix" | "report";
+type Tab = "spec" | "matrix" | "report" | "history";
 
 const STATUS_LABELS: Record<string, string> = {
   draft: "等待确认", drafting: "正在整理研究范围", discovering: "正在补充范围", awaiting_approval: "等待确认",
@@ -43,17 +43,24 @@ const PATH_LABELS: Record<string, string> = {
   "budget.max_llm_tokens": "最多模型用量", stop_conditions: "停止条件",
   id: "ID", name: "名称", version: "版本", rationale: "纳入理由", label: "显示名称",
   description: "说明", evidence_requirement: "证据要求", required_access: "来源访问要求", applies_to: "适用对象",
+  time_range: "时间范围", inclusion: "纳入条件", exclusion: "排除条件",
+  max_search_calls: "最多检索次数", max_active_seconds: "最长研究时间（秒）", max_llm_tokens: "最多模型用量",
 };
+
+const SPEC_FIELD_ORDER = ["title", "questions", "hard_constraints", "scope", "items", "fields", "source_policy", "allowed_domains", "queries", "sections", "budget", "stop_conditions"];
 
 const cloneSpec = (spec: ResearchSpec): ResearchSpec => structuredClone(spec);
 const safeId = (prefix: string) => `${prefix}_${crypto.randomUUID().slice(0, 8)}`;
 
 function formatValue(value: unknown): string {
+  if (value === "public_web") return "公开 Web 来源";
+  if (value === "primary_sources") return "优先使用一手与权威来源";
+  if (value === "diverse_public_sources") return "多来源交叉核验";
   if (value === "full_text") return "需要正文";
   if (value === "snippet") return "片段可用";
   if (value === null || value === undefined || value === "") return "未设置";
   if (Array.isArray(value)) return value.length ? value.map(formatValue).join("；") : "无";
-  if (typeof value === "object") return Object.entries(value as Record<string, unknown>).map(([key, item]) => `${PATH_LABELS[key] ?? key}：${formatValue(item)}`).join("；");
+  if (typeof value === "object") return Object.entries(value as Record<string, unknown>).map(([key, item]) => `${PATH_LABELS[key] ?? key}：${key === "applies_to" && Array.isArray(item) && !item.length ? "全部对象" : formatValue(item)}`).join("；");
   if (typeof value === "boolean") return value ? "是" : "否";
   return String(value);
 }
@@ -140,6 +147,56 @@ function ChangeList({ changes }: {changes: SpecChange[]}) {
   return <div className="rw-change-list">{changes.map((change) => <article key={change.path}><strong>{pathLabel(change.path)}</strong><span>{formatValue(change.before)}</span><i aria-hidden>→</i><span>{formatValue(change.after)}</span></article>)}</div>;
 }
 
+function VersionHistory({ study, pending, hasUnsavedChanges, onRestore }: {
+  study: ResearchStudy;
+  pending: boolean;
+  hasUnsavedChanges: boolean;
+  onRestore: (revision: number) => void;
+}) {
+  const [selectedRevision, setSelectedRevision] = useState(study.current_revision);
+  const [confirmRestore, setConfirmRestore] = useState(false);
+  const history = useQuery({
+    queryKey: ["research-revisions", study.study_id, study.current_revision],
+    queryFn: () => researchApi.revisions(study.study_id),
+  });
+  const detail = useQuery({
+    queryKey: ["research-revision", study.study_id, selectedRevision],
+    queryFn: () => researchApi.revision(study.study_id, selectedRevision),
+    staleTime: Infinity,
+  });
+  const differences = useMemo(() => detail.data ? diffResearchSpec(detail.data.spec, study.spec) : [], [detail.data, study.spec]);
+  const entries = detail.data ? Object.entries(detail.data.spec).sort(([left], [right]) => {
+    const rank = (key: string) => SPEC_FIELD_ORDER.includes(key) ? SPEC_FIELD_ORDER.indexOf(key) : SPEC_FIELD_ORDER.length;
+    return rank(left) - rank(right);
+  }) : [];
+  const isCurrent = selectedRevision === study.current_revision;
+  const cannotRestore = pending || hasUnsavedChanges || isCurrent || !detail.data || Boolean(detail.error);
+
+  return <div className="rw-panel rw-history-panel">
+    <div className="rw-section-head"><div><h3>历史版本</h3><p>查看每一版完整研究范围，核对与当前版本的差异。</p></div><span className="rw-badge">只读</span></div>
+    {history.isLoading ? <p role="status">正在载入版本列表…</p> : history.error ? <div role="alert">版本列表载入失败。<button className="rw-secondary" onClick={() => history.refetch()}>重试版本列表</button></div> :
+      <label className="rw-history-select">选择版本<select value={selectedRevision} disabled={pending} onChange={(event) => { setSelectedRevision(Number(event.target.value)); setConfirmRestore(false); }}>
+        {history.data?.map((version) => <option key={version.revision} value={version.revision}>第 {version.revision} 版{version.revision === study.current_revision ? "（当前版本）" : ""}</option>)}
+      </select></label>}
+    {detail.isLoading ? <p role="status">正在载入版本内容…</p> : detail.error ? <div role="alert">版本内容载入失败。<button className="rw-secondary" onClick={() => detail.refetch()}>重试版本内容</button></div> : detail.data && <>
+      <section className="rw-history-snapshot" aria-label={`第 ${selectedRevision} 版完整内容`}>
+        <h4>第 {selectedRevision} 版 · 完整研究范围{isCurrent ? "（当前版本）" : ""}</h4>
+        <dl>{entries.map(([key, value]) => <div key={key}><dt>{pathLabel(key)}</dt><dd>{Array.isArray(value) && value.length ? <ul>{value.map((item, index) => <li key={index}>{formatValue(item)}</li>)}</ul> : formatValue(value)}</dd></div>)}</dl>
+      </section>
+      {!isCurrent && <section className="rw-history-diff"><h4>第 {selectedRevision} 版 → 当前第 {study.current_revision} 版</h4>{differences.length ? <ChangeList changes={differences} /> : <p>这两个版本的研究范围完全相同。</p>}</section>}
+      <div className="rw-history-restore">
+        <p>回退会将所选内容保存为新版本，保留全部历史记录。新版本需要重新确认后才能开始调查。</p>
+        {hasUnsavedChanges && <p className="rw-helper">有未保存的修改或修订要求，请先回到研究范围处理，再回退版本。</p>}
+        {confirmRestore && !hasUnsavedChanges ? <div role="group" aria-label="确认回退">
+          <p>确定将第 {selectedRevision} 版恢复为新的第 {study.current_revision + 1} 版？{isResearchActive(study) && "正在运行的研究将先暂停。"}</p>
+          <button className="rw-primary" disabled={cannotRestore} onClick={() => onRestore(selectedRevision)}>{pending ? "正在回退…" : "确认回退并创建新版本"}</button>
+          <button className="rw-secondary" disabled={pending} onClick={() => setConfirmRestore(false)}>取消</button>
+        </div> : <button className="rw-secondary" disabled={cannotRestore} onClick={() => setConfirmRestore(true)}>{isCurrent ? "已是当前版本" : "回退到此版本"}</button>}
+      </div>
+    </>}
+  </div>;
+}
+
 function cellText(cell?: ResearchCell): string {
   if (!cell) return "尚未研究";
   return cell.value === null || cell.value === undefined || cell.value === "" ? cell.reason || CELL_LABELS[cell.status] : formatValue(cell.value);
@@ -182,8 +239,8 @@ export function ResearchWorkbench({ studyId, onRun, onEvidence }: Props) {
     refetchInterval: () => isResearchActive(study) ? 4000 : false,
   });
 
-  useEffect(() => { if (study) setDraft(cloneSpec(study.spec)); }, [study?.current_revision, study?.fingerprint]);
-  useEffect(() => { setSelectedCells([]); setError(""); setNotice(""); }, [studyId]);
+  useEffect(() => { if (study) setDraft(cloneSpec(study.spec)); }, [studyId, study?.current_revision, study?.fingerprint]);
+  useEffect(() => { setSelectedCells([]); setError(""); setNotice(""); setInstruction(""); }, [studyId]);
 
   const changes = useMemo(() => study && draft ? diffResearchSpec(study.spec, draft) : [], [study, draft]);
   const serverChanges = useMemo(() => normalizeResearchDiff(study?.diff), [study?.diff]);
@@ -194,6 +251,7 @@ export function ResearchWorkbench({ studyId, onRun, onEvidence }: Props) {
     await Promise.all([
       queryClient.invalidateQueries({queryKey: ["research-study", studyId]}),
       queryClient.invalidateQueries({queryKey: ["research-matrix", studyId]}),
+      queryClient.invalidateQueries({queryKey: ["research-revisions", studyId]}),
     ]);
   };
   const action = useMutation({mutationFn: async (operation: () => Promise<unknown>) => operation(), onError: (caught) => setError(researchErrorMessage(caught))});
@@ -229,6 +287,11 @@ export function ResearchWorkbench({ studyId, onRun, onEvidence }: Props) {
     });
   };
   const accept = () => runAction(() => researchApi.accept(study), "报告已审阅并定稿。", () => setTab("report"));
+  const restore = (revision: number) => runAction(
+    () => researchApi.restore(study, revision),
+    `已恢复第 ${revision} 版的内容并保存为新版本，请重新确认研究范围。`,
+    () => { setSelectedCells([]); setFollowupReason(""); setTab("spec"); },
+  );
 
   return <section className="research-workbench" aria-label="研究工作台">
     <header className="rw-header"><div><span>结构化研究</span><h2>{study.spec.title || "未命名课题"}</h2><p>第 {study.current_revision} 版 · {study.run_status ? RUN_STATUS_LABELS[study.run_status] ?? "处理中" : STATUS_LABELS[study.status] ?? "处理中"}</p></div><div className="rw-usage"><span>外部检索<b>{study.usage.external_calls}</b></span><span>发现阶段<b>{study.usage.discovery_calls}</b></span><span>模型用量<b>{study.usage.llm_tokens.toLocaleString()}</b></span></div></header>
@@ -236,9 +299,12 @@ export function ResearchWorkbench({ studyId, onRun, onEvidence }: Props) {
       <button className={tab === "spec" ? "active" : ""} onClick={() => setTab("spec")}><span>1</span>研究范围<small>{approved ? "已确认" : "待核对"}</small></button>
       <button className={tab === "matrix" ? "active" : ""} onClick={() => setTab("matrix")}><span>2</span>证据矩阵<small>{counts ? `${counts.current}/${counts.expected}` : "载入中"}</small></button>
       <button className={tab === "report" ? "active" : ""} onClick={() => setTab("report")}><span>3</span>审阅与定稿<small>{accepted ? "已定稿" : study.report ? "待审阅" : "待生成"}</small></button>
+      <button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>历史版本<small>共 {study.current_revision} 版</small></button>
     </nav>
 
     {(error || notice) && <div className={`rw-feedback ${error ? "error" : "success"}`} role={error ? "alert" : "status"}>{error || notice}</div>}
+
+    {tab === "history" && <VersionHistory key={`${studyId}:${study.current_revision}`} study={study} pending={action.isPending} hasUnsavedChanges={changes.length > 0 || Boolean(instruction.trim())} onRestore={restore} />}
 
     {tab === "spec" && <div className="rw-panel rw-spec-layout"><div className="rw-editor-column">
       <div className="rw-section-head"><div><h3>研究范围</h3><p>这里决定研究对象、证据要求和停止边界。</p></div><span className={approved ? "rw-badge success" : "rw-badge warning"}>{approved ? "当前范围已确认" : "确认后开始调查"}</span></div>
@@ -247,7 +313,7 @@ export function ResearchWorkbench({ studyId, onRun, onEvidence }: Props) {
     </div><aside className="rw-review-column">
       <section><h3>用自然语言修订</h3><p>说明要增删或收紧的内容，系统会生成一版可检查的研究范围。</p><label>修订要求<textarea rows={5} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="例如：只研究 2023 年后的公开资料，并增加局限性字段。" /></label>{changes.length > 0 && <small className="rw-helper">请先保存或撤销左侧的本地修改。</small>}<button className="rw-secondary wide" disabled={!instruction.trim() || action.isPending || changes.length > 0} onClick={submitInstruction}>生成修订版本</button></section>
       <section><h3>本地修改</h3><ChangeList changes={changes} /></section>
-      {study.diff != null && <section><h3>版本差异</h3>{serverChanges.length ? <ChangeList changes={serverChanges} /> : <p className="rw-server-diff">当前版本由上一版修订而来。请结合左侧字段逐项核对，再确认研究范围。</p>}</section>}
+      {study.diff != null && <section><h3>版本差异</h3>{serverChanges.length ? <ChangeList changes={serverChanges} /> : <p className="rw-server-diff">{study.current_revision === 1 ? "这是研究范围的初始版本。" : "当前版本与上一版的研究范围相同。"}</p>}</section>}
       <section className="rw-approval"><h3>确认当前范围</h3><p>确认这版研究范围后开始调查。</p><button className="rw-primary wide" disabled={approved || changes.length > 0 || action.isPending || isResearchActive(study)} onClick={approve}>{approved ? "当前范围已确认" : isResearchActive(study) ? "正在生成研究范围…" : changes.length ? "请先保存本地修改" : "确认并开始调查"}</button></section>
     </aside></div>}
 

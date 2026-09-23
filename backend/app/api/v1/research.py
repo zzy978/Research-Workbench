@@ -1,7 +1,7 @@
 """Version-bound user actions for the research workbench."""
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Path, Query
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, model_validator
 
@@ -32,6 +32,10 @@ class ApprovalAction(VersionAction):
     client_request_id: str = Field(min_length=1, max_length=128)
 
 
+class RestoreAction(VersionAction):
+    source_revision: int = Field(ge=1)
+
+
 class CellTarget(BaseModel):
     item_id: str
     field_id: str
@@ -56,6 +60,21 @@ async def get_study(study_id: str, service=Depends(get_run_service)):
 @router.post('/{study_id}/revisions')
 async def revise(study_id: str, payload: RevisionAction, service=Depends(get_run_service)):
     return await service.research.revise(study_id, payload)
+
+
+@router.get('/{study_id}/revisions')
+async def revisions(study_id: str, service=Depends(get_run_service)):
+    return await service.research.store.revisions(study_id)
+
+
+@router.get('/{study_id}/revisions/{revision}')
+async def revision_detail(study_id: str, revision: int = Path(ge=1), service=Depends(get_run_service)):
+    return await service.research.store.get_revision(study_id, revision)
+
+
+@router.post('/{study_id}/restore')
+async def restore(study_id: str, payload: RestoreAction, service=Depends(get_run_service)):
+    return await service.research.restore(study_id, payload)
 
 
 @router.post('/{study_id}/approve')
