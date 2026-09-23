@@ -9,7 +9,7 @@ const EVENT_LABELS: Record<string, string> = {
   "task.started": "任务开始", "task.completed": "任务完成", "task.failed": "任务失败",
   "tool.completed": "工具实时返回", "tool.failed": "工具失败", "evidence.added": "证据入账",
   "report.completed": "报告完成", "verification.completed": "验证完成", "run.completed": "Run 完成",
-  "run.failed": "Run 失败", "run.retrying": "Run 重试",
+  "run.failed": "Run 失败", "run.retrying": "Run 重试", "run.partial": "研究部分完成",
   "learning.review.queued": "学习复盘已入队", "learning.review.started": "学习复盘开始",
   "learning.review.ignored": "学习复盘无可沉淀内容", "learning.review.failed": "学习复盘失败",
   "learning.review.retried": "学习复盘已重试",

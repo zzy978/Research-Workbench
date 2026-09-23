@@ -32,6 +32,7 @@ export const STAGES: StageMeta[] = [
 /** 运行阶段 → 画板卡片 id（retrying/replanning 归执行卡；失败态也归执行卡） */
 export function stageCardId(stage?: string | null): string | null {
   if (!stage) return null;
+  if (stage === "partial") return "verifying";
   if (["retrying", "replanning", "failed", "cancelled", "budget_exhausted", "interrupted"].includes(stage)) return "executing";
   return STAGES.some((s) => s.id === stage) ? stage : null;
 }

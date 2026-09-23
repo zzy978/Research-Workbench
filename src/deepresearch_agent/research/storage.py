@@ -20,6 +20,7 @@ from deepresearch_agent.harness.budgets import BudgetExceeded
 from deepresearch_agent.harness.errors import AppError, ErrorCode
 from deepresearch_agent.persistence.models import Base, EvidenceModel, RunModel, ToolCallModel
 from .schemas import as_spec, canonical, cell_fingerprint, digest, effective_items, spec_fingerprint
+from .failures import CellValidationError
 
 
 class StudyModel(Base):
@@ -312,12 +313,12 @@ class ResearchStore:
         sources = set()
         for citation in citations:
             if not isinstance(citation, dict):
-                conflict("引用格式无效")
+                raise CellValidationError("引用格式无效")
             ev = await session.get(EvidenceModel, citation.get("evidence_id"))
             if ev is None or ev.run_id not in links or ev.invalidated_at or ev.content_hash != citation.get("content_hash"):
-                conflict("引用不属于本研究或内容已失效")
+                raise CellValidationError("引用不属于本研究或内容已失效")
             if not ev.summary.strip() or not ev.content_hash:
-                conflict("引用没有实际证据内容")
+                raise CellValidationError("引用没有实际证据内容")
             sources.add(ev.source_id)
         return sources
 
@@ -333,41 +334,50 @@ class ResearchStore:
             if link.targets_json and target not in json.loads(link.targets_json):
                 conflict("单元不属于本轮补充研究目标")
             status = cell.get("status")
-            if status not in {"supported", "inference", "conflict", "not_found", "not_applicable"}:
-                conflict("无效的单元状态")
+            if status not in {"supported", "inference", "conflict", "not_found", "not_applicable", "pending_retry"}:
+                raise CellValidationError("无效的单元状态")
             if applicable == (status == "not_applicable"):
-                conflict("单元状态与字段适用范围不一致")
+                raise CellValidationError("单元状态与字段适用范围不一致")
             citations = cell.get("citations") or []
             sources = await self._citations(session, study_id, citations)
             if status in {"supported", "inference", "conflict"}:
                 if not citations or cell.get("value") is None or cell.get("value") == "":
-                    conflict("结论需要实际取值和证据引用")
+                    raise CellValidationError("结论需要实际取值和证据引用")
                 if spec.allowed_domains:
                     for source_id in sources:
                         try:
                             source = urlsplit(source_id)
                             hostname = (source.hostname or "").lower().rstrip(".")
                         except ValueError:
-                            conflict("证据来源不是有效的公开网页地址")
+                            raise CellValidationError("证据来源不是有效的公开网页地址")
                         if source.scheme not in {"http", "https"} or not any(
                             hostname == domain or hostname.endswith("." + domain)
                             for domain in spec.allowed_domains
                         ):
-                            conflict("证据来源不在已批准的来源域名范围内")
+                            raise CellValidationError("证据来源不在已批准的来源域名范围内")
                 field = next(f for f in spec.fields if f.id == cell['field_id'])
                 if field.required_access == 'full_text':
                     for citation in citations:
                         ev = await session.get(EvidenceModel, citation['evidence_id'])
                         metadata = json.loads(ev.metadata_json or '{}')
                         if metadata.get('extra', {}).get('access') != 'full_text':
-                            conflict('当前字段要求正文，搜索片段不能支撑该结论')
+                            raise CellValidationError('当前字段要求正文，搜索片段不能支撑该结论')
             if status == "conflict" and len(sources) < 2:
-                conflict("冲突需要至少两个独立来源")
+                raise CellValidationError("冲突需要至少两个独立来源")
             if status == "not_found":
                 attempt = await session.scalar(select(ToolCallModel.tool_call_id).where(ToolCallModel.run_id == run_id, ToolCallModel.status.in_({"completed", "failed"})).limit(1))
                 if not str(cell.get("reason", "")).strip() or not (cell.get("search_log") or attempt):
-                    conflict("未找到证据需要检索记录和原因")
+                    raise CellValidationError("未找到证据需要检索记录和原因")
+            if status == 'pending_retry':
+                failure = cell.get('failure')
+                if (not isinstance(failure, dict) or failure.get('stage') not in {'retrieval', 'extraction', 'validation'}
+                        or not failure.get('code') or not failure.get('reason')
+                        or not isinstance(failure.get('attempts'), int) or failure['attempts'] < 1
+                        or cell.get('value') is not None or citations):
+                    raise CellValidationError('待补查字段必须保留失败阶段、原因和次数，不能包含未核验结论')
             payload = {**target, "status": status, "value": cell.get("value"), "reason": cell.get("reason", ""), "citations": citations, "search_log": cell.get("search_log", [])}
+            if status == 'pending_retry':
+                payload['failure'] = cell['failure']
             session.add(CellModel(study_id=study_id, revision=revision, run_id=run_id, item_id=cell["item_id"], field_id=cell["field_id"], fingerprint=fingerprint, cell_json=canonical(payload)))
             study.acceptance_json = None
             study.status = "investigating"
@@ -406,7 +416,7 @@ class ResearchStore:
         link_order = {link.run_id: link.sequence for link in links}
         barriers = await self._followup_barriers(session, study.study_id, links)
         rows = list((await session.scalars(select(CellModel).where(CellModel.study_id == study.study_id).order_by(CellModel.sequence.desc()))).all())
-        counts = {"expected": 0, "current": 0, "missing": 0, "stale": 0, "unknown": 0}
+        counts = {"expected": 0, "current": 0, "missing": 0, "stale": 0, "unknown": 0, "pending_retry": 0}
         cells = []
         for item in effective_items(spec):
             for field in spec.fields:
@@ -435,7 +445,7 @@ class ResearchStore:
                     base.update(json.loads(selected.cell_json))
                     base["origin_run_id"] = selected.run_id
                     base["run_id"] = current_run or selected.run_id
-                    counts["current"] += 1
+                    counts['pending_retry' if base['status'] == 'pending_retry' else 'current'] += 1
                     counts["unknown"] += base["status"] == "not_found"
                 elif relevant:
                     base.update(json.loads(relevant[0].cell_json))
@@ -458,7 +468,8 @@ class ResearchStore:
 
     @staticmethod
     def _complete(matrix, content):
-        return bool(content.strip() and not matrix["counts"]["missing"] and not matrix["counts"]["stale"] and any(c["citations"] for c in matrix["cells"]))
+        return bool(content.strip() and not matrix["counts"]["missing"] and not matrix["counts"]["stale"]
+                    and not matrix['counts'].get('pending_retry') and any(c["citations"] for c in matrix["cells"]))
 
     async def set_report(self, study_id, revision, run_id, content, complete):
         async with self._write() as session:

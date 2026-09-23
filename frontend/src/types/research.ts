@@ -77,7 +77,7 @@ export interface ResearchCitation {
   access: string;
 }
 
-export type ResearchCellStatus = "supported" | "inference" | "conflict" | "not_found" | "not_applicable" | "missing" | "stale" | "unknown";
+export type ResearchCellStatus = "supported" | "inference" | "conflict" | "not_found" | "not_applicable" | "missing" | "stale" | "unknown" | "pending_retry";
 
 export interface ResearchCell {
   item_id: string;
@@ -85,6 +85,7 @@ export interface ResearchCell {
   status: ResearchCellStatus;
   value: unknown;
   reason: string;
+  failure?: { stage: "retrieval" | "extraction" | "validation"; code: string; attempts: number; reason: string };
   citations: ResearchCitation[];
   fingerprint: string;
   origin_run_id?: string | null;
@@ -95,7 +96,7 @@ export interface ResearchMatrix {
   items: ResearchItem[];
   fields: ResearchField[];
   cells: ResearchCell[];
-  counts: { expected: number; current: number; missing: number; stale: number; unknown: number };
+  counts: { expected: number; current: number; missing: number; stale: number; unknown: number; pending_retry?: number };
   view_mode: "comparison" | "questions";
 }
 
@@ -114,7 +115,7 @@ export interface SpecChange {
 }
 
 const ACTIVE_STUDY_STATUSES = new Set(["drafting", "discovering", "investigating", "researching", "running", "reporting"]);
-const INACTIVE_RUN_STATUSES = new Set(["awaiting_scope_approval", "needs_user_input", "completed", "failed", "interrupted", "cancelled", "budget_exhausted", "paused"]);
+const INACTIVE_RUN_STATUSES = new Set(["awaiting_scope_approval", "needs_user_input", "completed", "partial", "failed", "interrupted", "cancelled", "budget_exhausted", "paused"]);
 
 export function isResearchActive(study?: Pick<ResearchStudy, "status" | "run_status"> | null): boolean {
   if (!study) return false;

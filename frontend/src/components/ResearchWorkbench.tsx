@@ -27,12 +27,12 @@ const RUN_STATUS_LABELS: Record<string, string> = {
   awaiting_scope_approval: "等待确认", planning: "正在制定计划", executing: "正在检索证据",
   reporting: "正在撰写报告", verifying: "正在核验", retrying: "正在重试", replanning: "正在调整计划",
   needs_user_input: "等待补充信息", paused: "已暂停", completed: "研究已完成", failed: "研究中断",
-  cancelled: "已取消", budget_exhausted: "预算已用尽",
+  cancelled: "已取消", budget_exhausted: "预算已用尽", partial: "部分完成，仍有缺口",
 };
 
 const CELL_LABELS: Record<string, string> = {
   supported: "有证据", inference: "推断", conflict: "来源冲突", not_found: "未找到",
-  not_applicable: "不适用", missing: "待补充", stale: "需更新", unknown: "待核实",
+  not_applicable: "不适用", missing: "待补充", stale: "需更新", unknown: "待核实", pending_retry: "待补查",
 };
 
 const PATH_LABELS: Record<string, string> = {
@@ -214,6 +214,7 @@ function MatrixCell({ cell, item, field, selected, onSelect, onEvidence }: {
   return <div className={`rw-cell-content status-${cell?.status ?? "missing"}`}>
     <div className="rw-cell-head"><span>{CELL_LABELS[cell?.status ?? "missing"]}</span>{selectable && <input type="checkbox" aria-label={`选择 ${item.name} 的 ${field.label}`} checked={selected} onChange={(event) => onSelect(event.target.checked)} />}</div>
     <p>{cellText(cell)}</p>
+    {cell?.failure && <small>{({retrieval: "检索失败", extraction: "抽取失败", validation: "证据校验失败"})[cell.failure.stage]} · 已尝试 {cell.failure.attempts} 次</small>}
     {cell?.reason && cell.value !== null && cell.value !== undefined && <small>{cell.reason}</small>}
     <div className="rw-citations">{cell?.citations.map((citation) => <button key={citation.evidence_id} onClick={() => onEvidence(citation.evidence_id, cell.origin_run_id ?? cell.run_id ?? undefined)}>{citation.locator || "查看证据"}</button>)}</div>
   </div>;
@@ -264,7 +265,7 @@ export function ResearchWorkbench({ studyId, onRun, onEvidence }: Props) {
   if (studyQuery.isLoading || !study || !draft) return <section className="research-workbench rw-loading" aria-live="polite">正在载入研究工作台…</section>;
 
   const validation = validateSpec(draft);
-  const reportReady = Boolean(study.report?.complete && matrixQuery.data && matrixQuery.data.counts.missing === 0 && matrixQuery.data.counts.stale === 0 && !isResearchActive(study));
+  const reportReady = Boolean(study.report?.complete && matrixQuery.data && matrixQuery.data.counts.missing === 0 && matrixQuery.data.counts.stale === 0 && !matrixQuery.data.counts.pending_retry && !isResearchActive(study));
   const accepted = Boolean(study.acceptance);
   const counts = matrixQuery.data?.counts;
 
@@ -317,7 +318,7 @@ export function ResearchWorkbench({ studyId, onRun, onEvidence }: Props) {
       <section className="rw-approval"><h3>确认当前范围</h3><p>确认这版研究范围后开始调查。</p><button className="rw-primary wide" disabled={approved || changes.length > 0 || action.isPending || isResearchActive(study)} onClick={approve}>{approved ? "当前范围已确认" : isResearchActive(study) ? "正在生成研究范围…" : changes.length ? "请先保存本地修改" : "确认并开始调查"}</button></section>
     </aside></div>}
 
-    {tab === "matrix" && <div className="rw-panel"><div className="rw-section-head"><div><h3>证据矩阵</h3><p>每个单元格对应一个对象和一个证据要求；可选择缺口发起定向补充。</p></div>{counts && <div className="rw-counts"><span>已完成 {counts.current}</span><span>缺失 {counts.missing}</span><span>过期 {counts.stale}</span><span>待核实 {counts.unknown}</span></div>}</div>
+    {tab === "matrix" && <div className="rw-panel"><div className="rw-section-head"><div><h3>证据矩阵</h3><p>每个单元格对应一个对象和一个证据要求；可选择缺口发起定向补充。</p></div>{counts && <div className="rw-counts"><span>已完成 {counts.current}</span><span>缺失 {counts.missing}</span><span>待补查 {counts.pending_retry ?? 0}</span><span>过期 {counts.stale}</span><span>待核实 {counts.unknown}</span></div>}</div>
       {matrixQuery.isLoading ? <div className="rw-empty">正在整理证据矩阵…</div> : matrixQuery.error ? <div className="rw-empty error">证据矩阵载入失败。<button onClick={() => matrixQuery.refetch()}>重试</button></div> : matrixQuery.data && (matrixQuery.data.view_mode === "questions" ? <div className="rw-question-coverage" aria-label="问题覆盖清单">{matrixQuery.data.items.map((item) => <section key={item.id} className="rw-question-card"><header><strong>{item.name}</strong>{(item.version || item.rationale) && <small>{item.version || item.rationale}</small>}</header><div className="rw-question-fields">{matrixQuery.data!.fields.map((field) => { const key = `${item.id}:${field.id}`; return <article key={field.id}><h4>{field.label}</h4><small>{field.evidence_requirement}</small><MatrixCell cell={cellMap.get(key)} item={item} field={field} selected={selectedCells.includes(key)} onSelect={(checked) => setSelectedCells(checked ? [...selectedCells, key] : selectedCells.filter((selected) => selected !== key))} onEvidence={onEvidence} /></article>; })}</div></section>)}</div> : <div className="rw-matrix-scroll"><table className="rw-matrix"><thead><tr><th scope="col">研究对象</th>{matrixQuery.data.fields.map((field) => <th scope="col" key={field.id}><strong>{field.label}</strong><small>{field.evidence_requirement}</small></th>)}</tr></thead><tbody>{matrixQuery.data.items.map((item) => <tr key={item.id}><th scope="row"><strong>{item.name}</strong><small>{item.version || item.rationale}</small></th>{matrixQuery.data!.fields.map((field) => { const key = `${item.id}:${field.id}`; return <td key={field.id}><MatrixCell cell={cellMap.get(key)} item={item} field={field} selected={selectedCells.includes(key)} onSelect={(checked) => setSelectedCells(checked ? [...selectedCells, key] : selectedCells.filter((selected) => selected !== key))} onEvidence={onEvidence} /></td>; })}</tr>)}</tbody></table></div>)}
       <div className="rw-followup"><div><strong>定向补充研究</strong><span>已选择 {selectedCells.length} 个证据单元</span></div><label>补充说明<textarea rows={2} value={followupReason} onChange={(event) => setFollowupReason(event.target.value)} placeholder="说明需要核实的争议、时间范围或证据强度。" /></label><button className="rw-primary" disabled={!selectedCells.length || !followupReason.trim() || action.isPending} onClick={followup}>开始补充研究</button></div>
     </div>}

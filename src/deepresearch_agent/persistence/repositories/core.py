@@ -226,7 +226,7 @@ class RunRepository:
             values["usage_json"] = json_text(usage)
         if status == "context_building":
             values["started_at"] = utc_now_iso()
-        if status in {"failed", "budget_exhausted", "cancelled"}:
+        if status in {"failed", "partial", "budget_exhausted", "cancelled"}:
             values["completed_at"] = utc_now_iso()
         async with self.database.transaction() as session:
             run = await session.get(RunModel, run_id)

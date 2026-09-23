@@ -155,7 +155,8 @@ class RunService:
             if context.config_snapshot.get('research_study_id'):
                 from deepresearch_agent.research.guard import ResearchProvider
                 raw_provider = ResearchProvider(raw_provider, self.research.store, context.run_id,
-                    targets=context.config_snapshot.get('research_unit'), events=events)
+                    targets=context.config_snapshot.get('research_unit'), events=events,
+                    assessor=lambda *args: self.research.call_model(context.run_id, 'assess_sources', *args))
             provider = TimeoutBoundProvider(
                 raw_provider,
                 timeout_seconds=context.budget_limits.tool_timeout_seconds,
@@ -163,13 +164,16 @@ class RunService:
             if context.workflow_mode is WorkflowMode.DEEP_RESEARCH:
                 agent = DeepResearchAgent(use_deeper_tool=True, retrieval_provider=provider, run_id=context.run_id)
                 agents.append(agent)
-                return DeepResearchDriver(context, agent, events=events)
-            worker = WorkerCoordinator(
-                retrieval_provider=provider,
-                max_parallel_workers=context.budget_limits.max_concurrency,
-            )
-            bundle = MultiAgentFactory.create_default_bundle(retrieval_provider=provider, worker=worker)
-            return PlanExecuteReportDriver(context, bundle.orchestrator, events=events)
+                driver = DeepResearchDriver(context, agent, events=events)
+            else:
+                worker = WorkerCoordinator(
+                    retrieval_provider=provider,
+                    max_parallel_workers=context.budget_limits.max_concurrency,
+                )
+                bundle = MultiAgentFactory.create_default_bundle(retrieval_provider=provider, worker=worker)
+                driver = PlanExecuteReportDriver(context, bundle.orchestrator, events=events)
+            driver.research_provider = raw_provider
+            return driver
 
         def workflow_factory(context, events=None):
             if context.config_snapshot.get('research_study_id'):
@@ -226,7 +230,8 @@ class RunService:
             return
         matrix = await self.research.store.matrix(study['study_id'])
         content = context.report or ResearchWorkflow.render(study['spec'], matrix, matrix['cells'])
-        complete = run.status == 'completed' and not matrix['counts']['missing'] and not matrix['counts']['stale']
+        complete = (run.status == 'completed' and not matrix['counts']['missing'] and not matrix['counts']['stale']
+                    and not matrix['counts'].get('pending_retry'))
         await self.research.store.set_report(study['study_id'], study['current_revision'], run.run_id, content, complete)
         await self.event_bus.publish(run.run_id, 'research.review_ready', stage='completed',
             payload={'study_id': study['study_id'], 'complete': complete})
@@ -290,7 +295,7 @@ class RunService:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         run = await self.runs.get(run_id)
-        if run is not None and run.status not in {'completed', 'failed', 'cancelled', 'budget_exhausted'}:
+        if run is not None and run.status not in {'completed', 'partial', 'failed', 'cancelled', 'budget_exhausted'}:
             # Cancellation can arrive after Runtime returned a waiting checkpoint,
             # while its scheduler task is still persisting final accounting.
             await self.runs.update_status(

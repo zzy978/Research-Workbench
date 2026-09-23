@@ -22,7 +22,7 @@ class StateMachine:
         RunStatus.EXECUTING: {RunStatus.EXECUTING, RunStatus.RETRYING, RunStatus.REPLANNING, RunStatus.REPORTING, RunStatus.PAUSED, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
         RunStatus.RETRYING: {RunStatus.EXECUTING, RunStatus.PAUSED, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
         RunStatus.REPORTING: {RunStatus.VERIFYING, RunStatus.PAUSED, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
-        RunStatus.VERIFYING: {RunStatus.COMPLETED, RunStatus.REPLANNING, RunStatus.REPORTING, RunStatus.PAUSED, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
+        RunStatus.VERIFYING: {RunStatus.COMPLETED, RunStatus.PARTIAL, RunStatus.REPLANNING, RunStatus.REPORTING, RunStatus.PAUSED, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
         RunStatus.REPLANNING: {RunStatus.EXECUTING, RunStatus.PAUSED, RunStatus.NEEDS_USER_INPUT, RunStatus.CANCELLING, RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED},
         RunStatus.CANCELLING: {RunStatus.CANCELLED},
         RunStatus.INTERRUPTED: {
@@ -36,7 +36,7 @@ class StateMachine:
         },
         RunStatus.NEEDS_USER_INPUT: {RunStatus.QUEUED, RunStatus.CANCELLING, RunStatus.FAILED},
     }
-    terminal = frozenset({RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED, RunStatus.CANCELLED})
+    terminal = frozenset({RunStatus.COMPLETED, RunStatus.PARTIAL, RunStatus.FAILED, RunStatus.BUDGET_EXHAUSTED, RunStatus.CANCELLED})
 
     def validate(self, current: RunStatus | str, target: RunStatus | str, *, contract_passed: bool = False) -> None:
         source = RunStatus(current)

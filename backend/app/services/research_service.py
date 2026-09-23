@@ -14,6 +14,7 @@ from deepresearch_agent.research.schemas import ResearchSpec
 from deepresearch_agent.research.storage import ResearchStore
 from deepresearch_agent.research.intelligence import ResearchModel
 from deepresearch_agent.research.guard import ResearchProvider
+from deepresearch_agent.research.retrieval_quality import needs_discovery
 from deepresearch_agent.retrieval.base import SearchFilters, ToolCallContext
 
 
@@ -94,14 +95,15 @@ class ResearchService:
             spec = await self.call_model(context.run_id, 'draft', context.original_query)
             spec = ResearchSpec.model_validate(spec).model_dump(mode='json')
             discoveries = []
-            # No discovery is required when explicit candidates already exist.
-            if not spec['items'] and self.owner._router is not None:
+            # Broad method families and unknown identities are not concrete candidates.
+            if needs_discovery(spec) and self.owner._router is not None:
                 provider = ResearchProvider(self.owner._router.for_mode(SourceMode.WEB), self.store,
                     context.run_id, phase='outline', events=self.owner.event_bus)
                 for query in (spec.get('queries') or [context.original_query])[:3]:
                     from deepresearch_agent.harness.budgets import BudgetExceeded
                     try:
-                        results = await provider.search(query, top_k=3, search_depth='basic', filters=SearchFilters(),
+                        results = await provider.search(query, top_k=5, search_depth='advanced',
+                            filters=SearchFilters(include_domains=tuple(spec.get('allowed_domains', []))),
                             call_context=ToolCallContext(run_id=context.run_id, source_mode=SourceMode.WEB))
                         discoveries.extend({'title': r.metadata.title, 'url': r.metadata.source_id,
                                             'snippet': str(r.evidence)[:1500]} for r in results)
@@ -112,7 +114,7 @@ class ResearchService:
                             stage='outline', payload={'code': exc.code.value})
                         break
                 if discoveries:
-                    spec = await self.call_model(context.run_id, 'draft', context.original_query, discoveries=discoveries)
+                    spec = await self.call_model(context.run_id, 'resolve_candidates', spec, discoveries)
             study = await self.store.revise(study['study_id'], study['current_revision'], study['fingerprint'], spec)
             await self.store.link_run(study['study_id'], study['current_revision'], context.run_id, purpose='outline')
             await self._configure(context.run_id, study)
@@ -173,6 +175,8 @@ class ResearchService:
     async def approve(self, study_id, payload):
         async with self.lock(study_id):
             existing = await self.store.get(study_id)
+            if needs_discovery(existing['spec']) and existing['spec']['items']:
+                raise AppError(ErrorCode.CONFLICT, '研究对象仍是待核实的分类，请先修订为有来源的具体论文、模型或产品再确认范围')
             running = self.owner._tasks.get(existing.get('run_id'))
             current_run = await self.owner.runs.get(existing.get('run_id'))
             if existing['approved_revision'] != existing['current_revision'] and running and not running.done() and current_run and current_run.status in {'outlining', 'context_building'}:

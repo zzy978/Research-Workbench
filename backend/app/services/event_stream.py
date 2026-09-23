@@ -8,7 +8,7 @@ from deepresearch_agent.harness.event_bus import EventBus
 from deepresearch_agent.persistence.repositories import EventRepository, RunRepository
 
 
-TERMINAL_STATUSES = {"completed", "failed", "budget_exhausted", "cancelled", "paused"}
+TERMINAL_STATUSES = {"completed", "partial", "failed", "budget_exhausted", "cancelled", "paused"}
 
 
 class EventStreamService:

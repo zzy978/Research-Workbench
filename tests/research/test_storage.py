@@ -224,7 +224,7 @@ async def test_incremental_revision_reuses_only_unchanged_cells(db):
     next_run = await run(db)
     await store.link_run(view["study_id"], 2, next_run)
     matrix = await store.matrix(view["study_id"])
-    assert matrix["counts"] == {"expected": 2, "current": 1, "missing": 0, "stale": 1, "unknown": 0}
+    assert matrix["counts"] == {"expected": 2, "current": 1, "missing": 0, "stale": 1, "unknown": 0, "pending_retry": 0}
     assert matrix["cells"][0]["origin_run_id"] == rid
     assert matrix["cells"][0]["run_id"] == next_run
 

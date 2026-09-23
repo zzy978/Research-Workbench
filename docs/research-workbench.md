@@ -25,8 +25,20 @@
 | 不适用 | 当前字段的适用范围不包含该对象 |
 | 尚未调查 | 尚无该单元的调查结果 |
 | 需要复查 | 范围、来源或定向补查要求使已有结论失效 |
+| 待补查 | 检索、资料抽取或证据校验失败，尚无通过校验的字段结论；保留失败原因和尝试次数 |
 
 结构检查会核对引用存在性、研究归属、内容指纹和范围版本。它不等于事实核验，也不能自动证明引文在语义上支持结论。
+
+## 局部失败与部分报告
+
+一个字段失败不会阻止其他字段和对象继续研究。检索失败与检索后的证据校验失败会分别显示原因：
+
+- 检索请求沿用 Tavily 最多 3 次的请求重试。该重试耗尽后，字段进入待补查；不会立即重新启动整套检索。其他未自带重试的检索失败，最多尝试 2 次。
+- 抽取或引用校验失败时，使用已保存的资料重新抽取，并传入上次失败原因。每个字段先最多尝试 2 次，不重复联网；成功字段保留。
+- 其他任务结束后，在剩余预算内补查一轮：检索失败的对象再尝试一次检索，抽取或校验失败的字段再尝试一次抽取。暂停恢复继续使用已保存的资料和字段结果。
+- 补查后仍有缺口，研究显示“部分完成，仍有缺口”，报告列出待补查字段及原因。这些字段不计入已完成数量，部分报告可以导出，不能定稿；可以选中缺口再发起定向补充研究。
+
+重试与补查共用原有预算，不会重置额度。预算耗尽、用户取消、认证失效、范围审批失效或无法保存结果时，整体停止；已保存的资料和字段结果保留。若所有已查资料都不能形成有引用的结论，也只交付部分报告。
 
 ## 启动与数据库升级
 
@@ -62,7 +74,7 @@ python -m alembic upgrade head
 
 ```powershell
 $env:PYTHONPATH = 'src;.;tests/api'
-python -m pytest tests/research tests/api/test_research_workbench.py tests/api/test_research_lifecycle_regressions.py tests/retrieval/test_research_request_guard.py -q
+python -m pytest tests/research tests/api/test_research_workbench.py tests/api/test_research_failure_isolation.py tests/api/test_research_lifecycle_regressions.py tests/retrieval/test_research_request_guard.py -q
 Push-Location frontend
 npm run test:research
 npm run build
@@ -95,6 +107,8 @@ node tests/e2e/research_workbench_browser.mjs .local-run/workbench/e2e-browser
 ```
 
 浏览器场景保存截图与断言结果，覆盖三个对象、新增字段、重复确认、旧页面提交、断线重连、旧证据打开和定稿后刷新。测试后关闭这两个服务；日常使用请恢复正常后端地址。
+
+局部失败浏览器场景使用单独的隔离目录与端口：后端启动前设置 `RESEARCH_E2E_INVALID_LOCATOR=1`、`RESEARCH_E2E_DELAY=0.1`，使用端口 `8014`；前端 API 指向 `http://127.0.0.1:8014/api/v1`，使用端口 `5174`。运行 `node tests/e2e/research_partial_browser.mjs`，验证坏引用字段显示待补查、其他对象完成、部分报告不能定稿，以及刷新后状态保留。
 
 真实模型小型对照使用现有模型与 Tavily 配置，会产生实际调用费用。输出放在 `.local-run/workbench/live/` 的时间戳目录，使用独立数据库：
 

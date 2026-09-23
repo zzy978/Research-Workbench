@@ -564,7 +564,7 @@ button { cursor: pointer; }
 .rw-cell-head span { display: inline-flex; padding: 3px 7px; border-radius: 999px; color: var(--text-secondary); background: var(--bg-subtle); font-size: 10px; font-weight: 600; }
 .rw-cell-head input { width: 18px; height: 18px; accent-color: var(--accent); }
 .rw-cell-content.status-supported .rw-cell-head span { color: var(--success); background: var(--success-soft); }
-.rw-cell-content.status-conflict .rw-cell-head span, .rw-cell-content.status-stale .rw-cell-head span { color: var(--warning); background: var(--warning-soft); }
+.rw-cell-content.status-conflict .rw-cell-head span, .rw-cell-content.status-stale .rw-cell-head span, .rw-cell-content.status-pending_retry .rw-cell-head span { color: var(--warning); background: var(--warning-soft); }
 .rw-cell-content.status-not_found .rw-cell-head span, .rw-cell-content.status-missing .rw-cell-head span { color: var(--danger); background: var(--danger-soft); }
 .rw-citations { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
 .rw-citations button { min-height: 30px; padding: 4px 7px; border: 1px solid var(--accent-border); border-radius: 6px; color: var(--accent); background: var(--accent-soft); font-size: 10px; }

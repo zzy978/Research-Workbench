@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { API_BASE, api } from "../api/client";
 import { Run, RunEvent } from "../types/api";
 
-const terminal = new Set(["completed", "failed", "cancelled", "budget_exhausted", "paused"]);
+const terminal = new Set(["completed", "partial", "failed", "cancelled", "budget_exhausted", "paused"]);
 
 /** 统一的后端状态轮询间隔（毫秒） */
 export const RUN_POLL_MS = 2000;
@@ -45,7 +45,7 @@ export function useRunEvents(runId?: string | null) {
         setEvents((items) => items.some((item) => item.event_id === data.event_id) ? items : [...items, data]);
         if (["run.", "research."].some((prefix) => String(data.event_type).startsWith(prefix))) sync();
       };
-      ["run.queued", "run.started", "run.stage_changed", "run.pause_requested", "run.paused", "run.resumed", "run.completed", "run.failed", "run.cancelled", "run.budget_exhausted", "run.needs_user_input", "plan.created", "plan.revised", "task.started", "task.completed", "task.failed", "tool.completed", "tool.failed", "evidence.added", "report.completed", "verification.completed", "agent.progress", "iteration.completed", "research.discovery_unavailable", "research.outline_ready", "research.scope_approved", "research.cell_updated", "research.search_requested", "research.cache_hit", "research.request_started", "research.search_completed", "research.review_ready", "research.accepted"].forEach((name) => source?.addEventListener(name, handle));
+      ["run.queued", "run.started", "run.stage_changed", "run.pause_requested", "run.paused", "run.resumed", "run.completed", "run.partial", "run.failed", "run.cancelled", "run.budget_exhausted", "run.needs_user_input", "plan.created", "plan.revised", "task.started", "task.completed", "task.failed", "tool.completed", "tool.failed", "evidence.added", "report.completed", "verification.completed", "agent.progress", "iteration.completed", "research.discovery_unavailable", "research.outline_ready", "research.scope_approved", "research.cell_updated", "research.search_requested", "research.cache_hit", "research.request_started", "research.search_completed", "research.review_ready", "research.accepted"].forEach((name) => source?.addEventListener(name, handle));
       source.onerror = () => {
         if (closed) return;
         source?.close(); setConnection("reconnecting");

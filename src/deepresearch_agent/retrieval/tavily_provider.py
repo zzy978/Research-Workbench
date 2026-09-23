@@ -8,6 +8,7 @@ import json
 import random
 import re
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -22,6 +23,7 @@ from deepresearch_agent.harness.policies import SourcePolicy
 from deepresearch_agent.persistence.artifact_store import ArtifactStore
 from deepresearch_agent.retrieval.base import SearchDepth, SearchFilters, ToolCallContext
 from deepresearch_agent.retrieval.web_utils import content_hash, domain_from_url, normalize_content, normalize_url
+from .documents import document_results, document_urls, has_paper_body, is_landing_page, is_paper_url
 
 
 class TavilyProvider:
@@ -116,7 +118,8 @@ class TavilyProvider:
                     raise AppError(ErrorCode.TAVILY_AUTH_FAILED, "Tavily 认证失败，请检查后端 API Key") from exc
                 if status == 429 or "limit" in name or "ratelimit" in name:
                     if attempt == 2:
-                        raise AppError(ErrorCode.TAVILY_RATE_LIMITED, "Tavily 请求频率受限", retryable=True) from exc
+                        raise AppError(ErrorCode.TAVILY_RATE_LIMITED, "Tavily 请求频率受限", retryable=True,
+                                       details={'retries_exhausted': True, 'attempts': 3}) from exc
                     await asyncio.sleep(self._retry_delay(exc, attempt))
                     continue
                 if status is not None and status < 500:
@@ -124,9 +127,77 @@ class TavilyProvider:
                 is_timeout = "timeout" in name
                 if attempt == 2:
                     code = ErrorCode.RETRIEVAL_TIMEOUT if is_timeout else ErrorCode.RETRIEVAL_FAILED
-                    raise AppError(code, "Tavily 检索超时" if is_timeout else "Tavily 检索暂时不可用", retryable=True) from exc
+                    raise AppError(code, "Tavily 检索超时" if is_timeout else "Tavily 检索暂时不可用", retryable=True,
+                                   details={'retries_exhausted': True, 'attempts': 3}) from exc
                 await asyncio.sleep((2 ** (attempt + 1)) + random.uniform(0, 0.25))
         raise AssertionError("unreachable")
+
+    async def read_documents(self, results, *, fields, call_context, filters=None):
+        """Fetch accepted paper HTML/PDF through Extract, with the same request guard as Search."""
+        self._policy.assert_tool_allowed(call_context.source_mode, 'tavily_search')
+        output = []
+        for source in results:
+            domain = domain_from_url(source.metadata.source_id)
+            if filters and (filters.include_domains and not any(domain == d or domain.endswith('.' + d) for d in filters.include_domains)
+                            or any(domain == d or domain.endswith('.' + d) for d in filters.exclude_domains)):
+                continue
+            extra = source.metadata.extra
+            required = any(f.get('required_access') == 'full_text' for f in fields)
+            if extra.get('section') or (not is_paper_url(source.metadata.source_id) and
+                                       (not required or extra.get('access') == 'full_text')):
+                output.append(source)
+                continue
+            fetched = []
+            failure = '正文获取失败或内容不包含可识别的方法与实验章节'
+            for url in document_urls(source.metadata.source_id, str(source.evidence)):
+                domain = domain_from_url(url)
+                if filters and (filters.include_domains and not any(domain == d or domain.endswith('.' + d) for d in filters.include_domains)
+                                or any(domain == d or domain.endswith('.' + d) for d in filters.exclude_domains)):
+                    continue
+                args = {'operation': 'extract', 'url': url}
+                raw = self._read_cache(args)
+                if raw is None:
+                    # Reservation errors must escape before any transport exception handling.
+                    if call_context.before_request:
+                        await call_context.before_request()
+                    try:
+                        raw = self._sanitize_external(await asyncio.to_thread(self._client.extract,
+                            urls=[url], extract_depth='advanced', format='markdown',
+                            timeout=min(30, self._timeout_seconds)))
+                    except Exception as exc:
+                        status = self._status_code(exc)
+                        if status in {401, 403} or any(token in type(exc).__name__.lower() for token in ('invalidapikey', 'forbidden', 'missingapikey')):
+                            raise AppError(ErrorCode.TAVILY_AUTH_FAILED, 'Tavily 正文获取认证失败') from exc
+                        continue
+                elif call_context.on_cache_hit:
+                    await call_context.on_cache_hit()
+                if not isinstance(raw, dict):
+                    continue
+                request_id = (call_context.tool_call_id or 'read') + '_extract_' + content_hash(url + json.dumps(raw, sort_keys=True))[:16]
+                artifact = self._store_raw(replace(call_context, tool_call_id=request_id), raw)
+                for entry in raw.get('results', []):
+                    # Do not accept another URL/redirect as evidence for this requested paper.
+                    try:
+                        actual_url = normalize_url(entry.get('url') or '')
+                    except ValueError:
+                        continue
+                    if actual_url != normalize_url(url):
+                        continue
+                    body = str(entry.get('raw_content') or '')
+                    if not body.strip() or (is_paper_url(url) and not has_paper_body(body)):
+                        continue
+                    fetched.extend(document_results(source, url, body, fields, artifact))
+                if fetched:
+                    # An HTTP 200 error/landing page is not a usable body and must remain retryable.
+                    self._write_cache(args, raw)
+                    break
+            if fetched:
+                output.extend(fetched)
+            else:
+                unresolved = source.model_copy(deep=True)
+                unresolved.metadata.extra.update(access='snippet', full_text_failure=failure)
+                output.append(unresolved)
+        return output
 
     @staticmethod
     def _status_code(exc: Exception) -> Optional[int]:
@@ -160,7 +231,8 @@ class TavilyProvider:
             extra = {
                 "untrusted_external_content": True,
                 "content_truncated": len(normalized) > 12000,
-                "access": "full_text" if item.get("raw_content") and len(normalized) <= 12000 else "snippet",
+                "access": "full_text" if item.get("raw_content") and len(normalized) <= 12000
+                    and not is_landing_page(url) and (not is_paper_url(url) or has_paper_body(body)) else "snippet",
                 "body_available": bool(item.get("raw_content")),
             }
             domain = domain_from_url(url)
@@ -222,7 +294,7 @@ class TavilyProvider:
         path = self._cache_dir / f"{self._cache_key(args)}.json"
         if not path.is_file():
             return None
-        ttl = 3600 if args.get("topic") == "news" or any(word in str(args["query"]).lower() for word in ("today", "latest", "最新", "今天")) else self._cache_ttl_seconds
+        ttl = 3600 if args.get("topic") == "news" or any(word in str(args.get("query", "")).lower() for word in ("today", "latest", "最新", "今天")) else self._cache_ttl_seconds
         if time.time() - path.stat().st_mtime > ttl:
             return None
         try:

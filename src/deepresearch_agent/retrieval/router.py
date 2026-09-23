@@ -58,6 +58,10 @@ class _LazyProvider:
     async def search(self, *args, **kwargs):
         return await self._get().search(*args, **kwargs)
 
+    async def read_documents(self, results, **kwargs):
+        reader = getattr(self._get(), 'read_documents', None)
+        return await reader(results, **kwargs) if reader else results
+
 
 __all__ = ["RetrievalRouter"]
 

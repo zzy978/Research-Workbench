@@ -38,6 +38,7 @@ class RunStatus(str, Enum):
     CANCELLING = "cancelling"
     CANCELLED = "cancelled"
     COMPLETED = "completed"
+    PARTIAL = "partial"
     FAILED = "failed"
     BUDGET_EXHAUSTED = "budget_exhausted"
     NEEDS_USER_INPUT = "needs_user_input"

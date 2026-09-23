@@ -8,6 +8,7 @@ test("只有仍在生成或研究中的课题需要自动刷新", () => {
   assert.equal(research.isResearchActive({ status: "draft", run_status: "awaiting_scope_approval" }), false);
   assert.equal(research.isResearchActive({ status: "investigating" }), true);
   assert.equal(research.isResearchActive({ status: "investigating", run_status: "completed" }), false);
+  assert.equal(research.isResearchActive({ status: "report_review", run_status: "partial" }), false);
   assert.equal(research.isResearchActive({ status: "awaiting_approval" }), false);
   assert.equal(research.isResearchActive({ status: "accepted" }), false);
 });

@@ -221,7 +221,7 @@ class HarnessRuntime:
                     context.budget_usage = budget.usage
                     persisted_evidence = await self.evidence_repository.list_for_run(run_id)
                     minimum_evidence = int(context.config_snapshot.get("min_evidence", 1))
-                    if len(persisted_evidence) < minimum_evidence:
+                    if len(persisted_evidence) < minimum_evidence and not context.config_snapshot.get('research_study_id'):
                         evidence_count = len(persisted_evidence)
                         coverage_reason = "no_source_evidence" if evidence_count == 0 else "insufficient_source_evidence"
                         failures = ["min_evidence", coverage_reason]
@@ -346,7 +346,8 @@ class HarnessRuntime:
                     if self.research_service and context.config_snapshot.get('research_study_id'):
                         study = await self.research_service.store.assert_allowed(run_id)
                         matrix = await self.research_service.store.matrix(study['study_id'])
-                        coverage_ok = not matrix['counts']['missing'] and not matrix['counts']['stale']
+                        coverage_ok = (not matrix['counts']['missing'] and not matrix['counts']['stale']
+                                       and not matrix['counts'].get('pending_retry'))
                         check = ContractCheckData(check_id=f'check_{run_id}_research_coverage', run_id=run_id,
                             kind='custom', verifier='research_coverage', verifier_version='1', passed=coverage_ok,
                             observed=matrix['counts'], explanation='当前批准范围的所有适用字段须有有效调查记录')
@@ -360,7 +361,11 @@ class HarnessRuntime:
                     context.workflow_state["verification_failures"] = verdict.failures
                     await self.checkpoints.save(context, "verifying")
                     decision = classify_verification_failures(verdict.failures) if not verdict.passed else None
-                    recovery_action = decision.action if verdict.recoverable and decision is not None else "complete" if verdict.passed else "fail"
+                    partial_research = bool(self.research_service and context.config_snapshot.get('research_study_id')
+                                            and ('research_coverage' in verdict.failures
+                                                 or not any(c.get('citations') for c in matrix['cells'])))
+                    recovery_action = ('partial' if partial_research else decision.action
+                                       if verdict.recoverable and decision is not None else "complete" if verdict.passed else "fail")
                     attempt = None
                     max_attempts = None
                     attempts_exhausted = False
@@ -383,6 +388,18 @@ class HarnessRuntime:
                             "attempts_exhausted": attempts_exhausted,
                         },
                     )
+                    if partial_research:
+                        # Local gaps are a truthful deliverable, never a passed
+                        # contract. Persist before announcing the terminal state.
+                        study = await self.research_service.store.assert_allowed(run_id)
+                        await self.research_service.store.set_report(
+                            study['study_id'], study['current_revision'], run_id, context.report or '', False)
+                        await self._transition(context, RunStatus.PARTIAL, event_type='run.partial',
+                            payload={'complete': False, 'failures': verdict.failures})
+                        await self.checkpoints.save(context, 'partial')
+                        await self.events.publish(run_id, 'research.review_ready', stage='partial',
+                            payload={'study_id': study['study_id'], 'complete': False})
+                        break
                     if verdict.passed:
                         if self.research_service and context.config_snapshot.get('research_study_id'):
                             study = await self.research_service.store.assert_allowed(run_id)
@@ -655,9 +672,13 @@ class HarnessRuntime:
         )
         if reported_tokens:
             budget.observe_tokens(reported_tokens)
+        incomplete_tasks = (set(driver.delivery_status().get('incomplete_tasks', []))
+                            if context.config_snapshot.get('research_study_id') and hasattr(driver, 'delivery_status') else set())
         for record in records:
             if record.task_id not in live_task_ids:
-                await self.events.publish(context.run_id, "task.completed", stage="executing", payload={"task_id": record.task_id, "evidence_count": len(record.evidence)})
+                await self.events.publish(context.run_id, "task.failed" if record.task_id in incomplete_tasks else "task.completed",
+                    stage="executing", payload={"task_id": record.task_id, "evidence_count": len(record.evidence)})
+                live_task_ids.add(record.task_id)
             for call in record.tool_calls:
                 if call.tool_call_id in seen_calls:
                     continue

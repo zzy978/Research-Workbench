@@ -18,10 +18,10 @@ import { useStagePositions } from "../hooks/useStagePositions";
 import { useRunEvents } from "../hooks/useRunEvents";
 import { Evidence, Run, SourceMode, WorkflowMode } from "../types/api";
 
-const TERMINAL = ["completed", "failed", "cancelled", "budget_exhausted", "paused"];
+const TERMINAL = ["completed", "partial", "failed", "cancelled", "budget_exhausted", "paused"];
 const ERROR_STATUS = ["failed", "budget_exhausted", "interrupted"];
 /** 终态/回退阶段（本身不是画板卡片，需回溯到最后一个真实阶段） */
-const NON_CARD_STAGES = ["failed", "cancelled", "budget_exhausted", "interrupted", "retrying", "replanning"];
+const NON_CARD_STAGES = ["partial", "failed", "cancelled", "budget_exhausted", "interrupted", "retrying", "replanning"];
 
 /** 千/百万位缩写，用于 token 计数展示 */
 function formatTokens(value: number | undefined): string {
@@ -45,6 +45,7 @@ function stageStateOf(id: string, currentStage: string | null | undefined, statu
   const idIndex = STAGES.findIndex((stage) => stage.id === id);
   if (idIndex < currentIndex) return "done";
   if (idIndex === currentIndex) {
+    if (status === "partial") return "paused";
     if (status === "cancelled") return "cancelled";
     if (status === "paused") return "paused";
     return ERROR_STATUS.includes(status) ? "error" : "busy";
@@ -83,7 +84,7 @@ function ExecCard({ feed, run }: {feed: StageFeed; run: Run | null}) {
   const toolPct = usage?.tool_calls && limits?.max_tool_calls ? Math.min(100, Math.round((usage.tool_calls / limits.max_tool_calls) * 100)) : 0;
   const cachePct = cacheHitRate(usage?.prefix_cache_hit_tokens, usage?.prefix_cache_miss_tokens);
 
-  const executionSummary = run?.error_code === 'QUALITY_REVIEW_ERROR' ? '内容审查发生技术错误，报告已保留' : run?.error_code === 'REPORT_PARTIAL' ? '报告部分完成，请查看未完成事项' : run?.status === "failed"
+  const executionSummary = run?.error_code === 'QUALITY_REVIEW_ERROR' ? '内容审查发生技术错误，报告已保留' : run?.status === 'partial' || run?.error_code === 'REPORT_PARTIAL' ? '报告部分完成，请查看未完成事项' : run?.status === "failed"
     ? ["NO_SOURCE_EVIDENCE", "INSUFFICIENT_SOURCE_EVIDENCE"].includes(run.error_code ?? "")
       ? "私域资料不足，研究已停止"
       : "研究执行失败"
@@ -302,7 +303,7 @@ export function ChatPage({ sessionId }: {sessionId?: string}) {
       case "verifying": {
         const done = feed.verification.filter((check) => check.passed != null).length;
         const passed = feed.verification.filter((check) => check.passed === true).length;
-        const lines = run?.status === "paused" ? ["验证阶段已暂停，恢复后继续"] : done > 0 ? [`已核查 ${done} 项 · ${passed} 项通过`] : ["正在逐项验证…"];
+        const lines = run?.status === "partial" ? ["部分报告已生成，仍有字段待补查"] : run?.status === "paused" ? ["验证阶段已暂停，恢复后继续"] : done > 0 ? [`已核查 ${done} 项 · ${passed} 项通过`] : ["正在逐项验证…"];
         if (feed.verifyFailures.length > 0) {
           if (feed.recovery?.attemptsExhausted && feed.recovery.action === "repair_report") lines.push(`报告自动修复 ${feed.recovery.attempt ?? feed.recovery.maxAttempts ?? 0} 次后仍未通过`);
           else if (feed.recovery?.attemptsExhausted && feed.recovery.action === "replan") lines.push(`重新规划 ${feed.recovery.attempt ?? feed.recovery.maxAttempts ?? 0} 次后仍未通过`);
